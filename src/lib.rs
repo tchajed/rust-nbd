@@ -1,3 +1,4 @@
+#![allow(clippy::upper_case_acronyms)]
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::io::prelude::*;
 use std::net::TcpListener;
@@ -145,10 +146,12 @@ impl Request {
             return other_error(format!("wrong request magic {}", magic));
         }
         let flags = stream.read_u16::<BE>()?;
-        let flags = CmdFlags::from_bits(flags).ok_or(io::Error::new(
-            io::ErrorKind::Other,
-            format!("unexpected command flags {}", flags),
-        ))?;
+        let flags = CmdFlags::from_bits(flags).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("unexpected command flags {}", flags),
+            )
+        })?;
         if !flags.is_empty() {
             return other_error(format!("unsupported flags: {:?}", flags));
         }
@@ -169,7 +172,7 @@ impl Request {
                     }
                     .put(&mut stream)?;
                     // TODO: probably shouldn't terminate in this case?
-                    return other_error(format!("large write request"));
+                    return other_error(format!("large write request of length {}", len));
                 }
                 let mut buf = vec![0; len as usize];
                 stream.read_exact(&mut buf)?;
@@ -306,7 +309,7 @@ impl Server {
         stream.write_u64::<BE>(self.export.size()?)?;
         let transmit = TransmitFlags::HAS_FLAGS | TransmitFlags::SEND_FLUSH;
         stream.write_u16::<BE>(transmit.bits())?;
-        stream.write_all(&vec![0u8; 124])?;
+        stream.write_all(&[0u8; 124])?;
         stream.flush()?;
         Ok(())
     }
