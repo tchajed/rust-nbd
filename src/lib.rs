@@ -342,8 +342,10 @@ impl Server {
         let listener = TcpListener::bind(addr)?;
         for stream in listener.incoming() {
             let stream = stream?;
+            println!("client connected");
             // TODO: how to process clients in parallel? self has to be shared among threads
             self.client(stream).expect("error handling stream");
+            println!("disconnect");
         }
         Ok(())
     }
