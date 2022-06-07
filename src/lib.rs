@@ -62,7 +62,7 @@ bitflags! {
   }
 }
 
-#[derive(IntoPrimitive, TryFromPrimitive, Debug)]
+#[derive(IntoPrimitive, TryFromPrimitive, Debug, Copy, Clone)]
 #[repr(u32)]
 #[allow(non_camel_case_types)]
 enum OptType {
@@ -75,7 +75,7 @@ enum OptType {
     GO = 7,
 }
 
-#[derive(IntoPrimitive, TryFromPrimitive, Debug)]
+#[derive(IntoPrimitive, TryFromPrimitive, Debug, Copy, Clone)]
 #[repr(u32)]
 #[allow(non_camel_case_types)]
 enum ReplyType {
@@ -92,6 +92,7 @@ where
     Err(io::Error::new(io::ErrorKind::Other, e))
 }
 
+#[derive(Debug, Clone)]
 struct Opt {
     typ: OptType,
     data: Vec<u8>,
@@ -112,7 +113,9 @@ impl Opt {
             ProtocolError(format!("option length {option_len} is too large"))
         );
         let mut data = vec![0u8; option_len as usize];
-        stream.read_exact(&mut data)?;
+        stream
+            .read_exact(&mut data)
+            .wrap_err_with(|| format!("reading option of size {option_len}"))?;
         Ok(Self { typ, data })
     }
 }
@@ -144,6 +147,7 @@ bitflags! {
     }
 }
 
+#[derive(Debug)]
 struct Request {
     // parsed in case we need them later
     #[allow(dead_code)]
@@ -157,6 +161,13 @@ struct Request {
 
 impl Request {
     fn get<IO: Read + Write>(mut stream: IO) -> Result<Self> {
+        // C: 32 bits, 0x25609513, magic (NBD_REQUEST_MAGIC)
+        // C: 16 bits, command flags
+        // C: 16 bits, type
+        // C: 64 bits, handle
+        // C: 64 bits, offset (unsigned)
+        // C: 32 bits, length (unsigned)
+        // C: (length bytes of data if the request is of type NBD_CMD_WRITE)
         let magic = stream.read_u32::<BE>()?;
         if magic != REQUEST_MAGIC {
             bail!(ProtocolError(format!("wrong request magic {}", magic)));
@@ -188,7 +199,9 @@ impl Request {
                     )));
                 }
                 let mut buf = vec![0; len as usize];
-                stream.read_exact(&mut buf)?;
+                stream
+                    .read_exact(&mut buf)
+                    .wrap_err_with(|| format!("parsing write request of length {len}"))?;
                 buf
             } else {
                 vec![]
@@ -355,6 +368,7 @@ impl Server {
     fn handle_ops<IO: Read + Write>(export: &Export, mut stream: IO) -> Result<()> {
         loop {
             let req = Request::get(&mut stream)?;
+            println!("request {:?}", req);
             match req.typ {
                 Cmd::READ => {
                     let data = export
@@ -399,7 +413,10 @@ impl Server {
             // TODO: how to process clients in parallel? self has to be shared among threads
             match self.client(stream) {
                 Ok(_) => println!("disconnect"),
-                Err(err) => eprintln!("error handling client:\n{}", err),
+                Err(err) => {
+                    // eprintln!("error handling client:\n{}", err)
+                    return Err(err);
+                }
             }
         }
         Ok(())
