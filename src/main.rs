@@ -25,7 +25,7 @@ fn main() -> std::io::Result<()> {
         .write(true)
         .create(true)
         .open("disk.img")?;
-    set_size(&mut file, 10_000_000)?;
+    set_size(&mut file, 10 * 1024 * 1024)?;
     let export = Export {
         name: "default".to_string(),
         file,

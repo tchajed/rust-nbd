@@ -116,8 +116,21 @@ enum Cmd {
     RESIZE = 8,
 }
 
+bitflags! {
+    struct CmdFlags: u16 {
+        const FUA = 1 << 0;
+        const NO_HOLE = 1 << 1;
+        // "don't fragment"
+        const DF = 1 << 2;
+        const REQ_ONE = 1 << 3;
+        const FAST_ZERO = 1 << 4;
+    }
+}
+
 struct Request {
-    flags: u16,
+    // parsed in case we need them later
+    #[allow(dead_code)]
+    flags: CmdFlags,
     typ: Cmd,
     handle: u64,
     offset: u64,
@@ -132,6 +145,13 @@ impl Request {
             return other_error(format!("wrong request magic {}", magic));
         }
         let flags = stream.read_u16::<BE>()?;
+        let flags = CmdFlags::from_bits(flags).ok_or(io::Error::new(
+            io::ErrorKind::Other,
+            format!("unexpected command flags {}", flags),
+        ))?;
+        if !flags.is_empty() {
+            return other_error(format!("unsupported flags: {:?}", flags));
+        }
         let typ = stream.read_u16::<BE>()?;
         let typ = Cmd::try_from(typ).map_err(|_| {
             io::Error::new(io::ErrorKind::Other, format!("unexpected command {}", typ))
