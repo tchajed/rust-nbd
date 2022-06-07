@@ -232,6 +232,11 @@ impl Export {
         self.file.sync_data()?;
         Ok(())
     }
+
+    fn size(&self) -> io::Result<u64> {
+        let meta = self.file.metadata()?;
+        Ok(meta.len())
+    }
 }
 
 #[derive(Debug)]
@@ -255,13 +260,8 @@ impl Server {
             Some(flags) => flags,
             None => return other_error(format!("unexpected client flags {}", client_flags)),
         };
-        if !client_flags
-            .contains(ClientHandshakeFlags::C_FIXED_NEWSTYLE | ClientHandshakeFlags::C_NO_ZEROES)
-        {
-            return other_error(format!(
-                "client is missing required flags {:?}",
-                client_flags
-            ));
+        if client_flags != ClientHandshakeFlags::C_FIXED_NEWSTYLE {
+            return other_error(format!("client has unsupported flags {:?}", client_flags));
         }
         Ok(())
     }
@@ -296,6 +296,13 @@ impl Server {
                         // handled by NBD_OPT_GO, but that isn't supported)
                         return other_error(format!("incorrect export name {export}"));
                     }
+                    // return export info
+                    stream.write_u64::<BE>(self.export.size()?)?;
+                    // TODO: transmission flags
+                    let transmit = TransmitFlags::HAS_FLAGS | TransmitFlags::SEND_FLUSH;
+                    stream.write_u16::<BE>(transmit.bits())?;
+                    stream.write_all(&vec![0u8; 124])?;
+                    stream.flush()?;
                     return Ok(&self.export);
                 }
                 _ => {
@@ -344,8 +351,10 @@ impl Server {
             let stream = stream?;
             println!("client connected");
             // TODO: how to process clients in parallel? self has to be shared among threads
-            self.client(stream).expect("error handling stream");
-            println!("disconnect");
+            match self.client(stream) {
+                Ok(_) => println!("disconnect"),
+                Err(err) => eprintln!("error handling client:\n{}", err),
+            }
         }
         Ok(())
     }
