@@ -301,6 +301,16 @@ impl Server {
         Ok(())
     }
 
+    /// send export info at the end of newstyle negotiation, when client sends NBD_OPT_EXPORT_NAME
+    fn send_export_info<IO: Write>(&self, mut stream: IO) -> io::Result<()> {
+        stream.write_u64::<BE>(self.export.size()?)?;
+        let transmit = TransmitFlags::HAS_FLAGS | TransmitFlags::SEND_FLUSH;
+        stream.write_u16::<BE>(transmit.bits())?;
+        stream.write_all(&vec![0u8; 124])?;
+        stream.flush()?;
+        Ok(())
+    }
+
     // after the initial handshake, "haggle" to agree on connection parameters
     fn handshake_haggle<IO: Read + Write>(&self, mut stream: IO) -> io::Result<&Export> {
         // only need to handle OPT_EXPORT_NAME, that will make the server functional
@@ -316,13 +326,7 @@ impl Server {
                         // handled by NBD_OPT_GO, but that isn't supported)
                         return other_error(format!("incorrect export name {export}"));
                     }
-                    // return export info
-                    stream.write_u64::<BE>(self.export.size()?)?;
-                    // TODO: transmission flags
-                    let transmit = TransmitFlags::HAS_FLAGS | TransmitFlags::SEND_FLUSH;
-                    stream.write_u16::<BE>(transmit.bits())?;
-                    stream.write_all(&vec![0u8; 124])?;
-                    stream.flush()?;
+                    self.send_export_info(&mut stream)?;
                     return Ok(&self.export);
                 }
                 _ => {
