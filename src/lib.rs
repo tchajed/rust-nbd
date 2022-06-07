@@ -1,33 +1,20 @@
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::io::prelude::*;
 use std::net::TcpListener;
-use std::thread;
-use std::{io, net::TcpStream};
+use std::{fs::File, io};
 
 use std::error::Error;
 
 use bitflags::bitflags;
 use byteorder::{ReadBytesExt, WriteBytesExt, BE};
 
-fn handle_echo(mut stream: TcpStream) -> io::Result<()> {
-    println!("hello");
-    stream.set_nodelay(true)?;
-    let mut buf: Vec<u8> = vec![Default::default(); 4096];
-    loop {
-        let n = stream.read(&mut buf)?;
-        if n == 0 {
-            println!("bye");
-            return Ok(());
-        }
-        stream.write(&buf[..n])?;
-    }
-}
+const MAGIC: u64 = 0x4e42444d41474943; // b"NBDMAGIC"
+const IHAVEOPT: u64 = 0x49484156454F5054; // b"IHAVEOPT"
+const REPLY_MAGIC: u64 = 0x3e889045565a9;
 
-#[derive(Debug, Default)]
-pub struct Server {}
-
-const MAGIC: u64 = 0x4e42444d41474943;
-const IHAVEOPT: u64 = 0x49484156454F5054;
+// transmission constants
+const REQUEST_MAGIC: u32 = 0x25609513;
+const SIMPLE_REPLY_MAGIC: u32 = 0x67446698;
 
 bitflags! {
   struct HandshakeFlags: u16 {
@@ -69,8 +56,14 @@ enum OptionType {
     GO = 7,
 }
 
-pub struct ConnConfig {
-    export: String,
+#[derive(IntoPrimitive, TryFromPrimitive)]
+#[repr(u32)]
+#[allow(non_camel_case_types)]
+enum ReplyType {
+    ACK = 1,
+    SERVER = 2,
+    ERR_UNSUP = (1 << 31) + 1,
+    ERR_TOO_BIG = (1 << 31) + 9,
 }
 
 fn other_error<T, E>(e: E) -> io::Result<T>
@@ -85,10 +78,96 @@ struct Option {
     data: Vec<u8>,
 }
 
+impl Option {
+    fn get<IO: Read>(mut stream: IO) -> io::Result<Self> {
+        let magic = stream.read_u64::<BE>()?;
+        if magic != IHAVEOPT {
+            return other_error(format!("unexpected option magic {magic}"));
+        }
+        let option = stream.read_u32::<BE>()?;
+        let typ = OptionType::try_from(option)
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "unexpected option"))?;
+        let option_len = stream.read_u32::<BE>()?;
+        if option_len > 100000 {
+            return other_error(format!("option length {option_len} is too large"));
+        }
+        let mut data = vec![0u8; option_len as usize];
+        stream.read_exact(&mut data)?;
+        Ok(Self { typ, data })
+    }
+}
+
+struct Request {
+    flags: u16,
+    typ: u16,
+    handle: u64,
+    offset: u64,
+    // TODO: this should be a reference to re-use request buffers
+    data: Vec<u8>,
+}
+
+impl Request {
+    fn get<IO: Read + Write>(mut stream: IO) -> io::Result<Self> {
+        let magic = stream.read_u32::<BE>()?;
+        if magic != REQUEST_MAGIC {
+            return other_error(format!("wrong request magic {}", magic));
+        }
+        let flags = stream.read_u16::<BE>()?;
+        let typ = stream.read_u16::<BE>()?;
+        let handle = stream.read_u64::<BE>()?;
+        let offset = stream.read_u64::<BE>()?;
+        let len = stream.read_u32::<BE>()?;
+        if len > 100000 {
+            todo!("return error reply")
+        }
+        let mut buf = vec![0; len as usize];
+        stream.read_exact(&mut buf)?;
+        Ok(Self {
+            flags,
+            typ,
+            handle,
+            offset,
+            data: buf.to_vec(),
+        })
+    }
+}
+
+struct SimpleReply {
+    err: u32,
+    handle: u64,
+    // TODO: use reference
+    data: Vec<u8>,
+}
+
+impl SimpleReply {
+    fn put<IO: Write>(self, mut stream: IO) -> io::Result<()> {
+        stream.write_u32::<BE>(SIMPLE_REPLY_MAGIC)?;
+        stream.write_u32::<BE>(self.err)?;
+        stream.write_u64::<BE>(self.handle)?;
+        stream.write_all(&self.data)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct Export {
+    pub name: String,
+    pub file: File,
+}
+
+#[derive(Debug)]
+pub struct Server {
+    export: Export,
+}
+
 impl Server {
+    pub fn new(export: Export) -> Self {
+        Self { export }
+    }
+
     // agree on basic negotiation flags (only fixed newstyle is supported so
     // this returns a unit)
-    fn initial_handshake<IO: Read + Write>(&self, mut stream: IO) -> io::Result<()> {
+    fn initial_handshake<IO: Read + Write>(mut stream: IO) -> io::Result<()> {
         stream.write_u64::<BE>(MAGIC)?;
         stream.write_u64::<BE>(IHAVEOPT)?;
         stream.write_u16::<BE>(HandshakeFlags::FIXED_NEWSTYLE.bits)?;
@@ -108,37 +187,55 @@ impl Server {
         Ok(())
     }
 
-    fn get_option<IO: Read>(&self, mut stream: IO) -> io::Result<Option> {
-        let magic = stream.read_u64::<BE>()?;
-        if magic != IHAVEOPT {
-            return other_error(format!("unexpected option magic {magic}"));
-        }
-        let option = stream.read_u32::<BE>()?;
-        let typ = OptionType::try_from(option)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "unexpected option"))?;
-        let option_len = stream.read_u32::<BE>()?;
-        if option_len > 100000 {
-            return other_error(format!("option length {option_len} is too large"));
-        }
-        let mut data = vec![0u8; option_len as usize];
-        stream.read_exact(&mut data)?;
-        Ok(Option { typ, data })
+    fn reply<IO: Write>(
+        mut stream: IO,
+        opt: OptionType,
+        reply_type: ReplyType,
+        data: &[u8],
+    ) -> io::Result<()> {
+        stream.write_u64::<BE>(REPLY_MAGIC)?;
+        stream.write_u32::<BE>(opt.into())?;
+        stream.write_u32::<BE>(reply_type.into())?;
+        stream.write_u32::<BE>(data.len() as u32)?;
+        stream.write_all(data)?;
+        stream.flush()?;
+        Ok(())
     }
 
     // after the initial handshake, "haggle" to agree on connection parameters
-    fn handshake_haggle<IO: Read + Write>(&self, mut stream: IO) -> io::Result<ConnConfig> {
+    fn handshake_haggle<IO: Read + Write>(&self, mut stream: IO) -> io::Result<&Export> {
         // only need to handle OPT_EXPORT_NAME, that will make the server functional
         loop {
-            let opt = self.get_option(&mut stream)?;
+            let opt = Option::get(&mut stream)?;
+            match opt.typ {
+                OptionType::EXPORT_NAME => {
+                    let export: String = String::from_utf8(opt.data).map_err(|_| {
+                        io::Error::new(io::ErrorKind::Other, "non-UTF8 export name")
+                    })?;
+                    if export != self.export.name {
+                        // protocol has no way to recover from this (it is
+                        // handled by NBD_OPT_GO, but that isn't supported)
+                        return other_error(format!("incorrect export name {export}"));
+                    }
+                    return Ok(&self.export);
+                }
+                _ => {
+                    Self::reply(&mut stream, opt.typ, ReplyType::ERR_UNSUP, &[])?;
+                }
+            }
         }
-        todo!("process options")
+    }
+
+    fn handle_ops<IO: Read + Write>(export: &Export, mut stream: IO) -> io::Result<()> {
+        loop {}
+        Ok(())
     }
 
     fn client<IO: Read + Write>(&self, mut stream: IO) -> io::Result<()> {
-        self.initial_handshake(&mut stream)?;
-        let config = self.handshake_haggle(&mut stream)?;
-        // need to implement actual operations on ConnConfig
-        todo!()
+        Self::initial_handshake(&mut stream)?;
+        let export = self.handshake_haggle(&mut stream)?;
+        Server::handle_ops(export, &mut stream)?;
+        Ok(())
     }
 
     pub fn start(self) -> io::Result<()> {
