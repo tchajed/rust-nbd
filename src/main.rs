@@ -1,8 +1,9 @@
+use color_eyre::Result;
 use std::fs::OpenOptions;
 
 use nbd::{Export, Server};
 
-fn main() -> std::io::Result<()> {
+fn main() -> Result<()> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)

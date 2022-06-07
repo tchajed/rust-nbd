@@ -1,5 +1,8 @@
 #![allow(clippy::upper_case_acronyms)]
+use color_eyre::eyre::{bail, ensure};
+use color_eyre::Result;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use std::fmt;
 use std::io::prelude::*;
 use std::net::TcpListener;
 use std::os::unix::prelude::FileExt;
@@ -19,6 +22,18 @@ const REPLY_MAGIC: u64 = 0x3e889045565a9;
 // transmission constants
 const REQUEST_MAGIC: u32 = 0x25609513;
 const SIMPLE_REPLY_MAGIC: u32 = 0x67446698;
+
+#[derive(Debug, Clone)]
+struct ProtocolError(String);
+
+impl fmt::Display for ProtocolError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "nbd protocol error: {}", self.0)?;
+        Ok(())
+    }
+}
+
+impl Error for ProtocolError {}
 
 bitflags! {
   struct HandshakeFlags: u16 {
@@ -83,18 +98,19 @@ struct Opt {
 }
 
 impl Opt {
-    fn get<IO: Read>(mut stream: IO) -> io::Result<Self> {
+    fn get<IO: Read>(mut stream: IO) -> Result<Self> {
         let magic = stream.read_u64::<BE>()?;
         if magic != IHAVEOPT {
-            return other_error(format!("unexpected option magic {magic}"));
+            bail!(ProtocolError(format!("unexpected option magic {magic}")));
         }
         let option = stream.read_u32::<BE>()?;
         let typ = OptType::try_from(option)
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "unexpected option"))?;
         let option_len = stream.read_u32::<BE>()?;
-        if option_len > 100000 {
-            return other_error(format!("option length {option_len} is too large"));
-        }
+        ensure!(
+            option_len < 10_000,
+            ProtocolError(format!("option length {option_len} is too large"))
+        );
         let mut data = vec![0u8; option_len as usize];
         stream.read_exact(&mut data)?;
         Ok(Self { typ, data })
@@ -140,25 +156,20 @@ struct Request {
 }
 
 impl Request {
-    fn get<IO: Read + Write>(mut stream: IO) -> io::Result<Self> {
+    fn get<IO: Read + Write>(mut stream: IO) -> Result<Self> {
         let magic = stream.read_u32::<BE>()?;
         if magic != REQUEST_MAGIC {
-            return other_error(format!("wrong request magic {}", magic));
+            bail!(ProtocolError(format!("wrong request magic {}", magic)));
         }
         let flags = stream.read_u16::<BE>()?;
-        let flags = CmdFlags::from_bits(flags).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("unexpected command flags {}", flags),
-            )
-        })?;
+        let flags = CmdFlags::from_bits(flags)
+            .ok_or_else(|| ProtocolError(format!("unexpected command flags {}", flags)))?;
         if !flags.is_empty() {
-            return other_error(format!("unsupported flags: {:?}", flags));
+            bail!(ProtocolError(format!("unsupported flags: {:?}", flags)));
         }
         let typ = stream.read_u16::<BE>()?;
-        let typ = Cmd::try_from(typ).map_err(|_| {
-            io::Error::new(io::ErrorKind::Other, format!("unexpected command {}", typ))
-        })?;
+        let typ =
+            Cmd::try_from(typ).map_err(|_| ProtocolError(format!("unexpected command {}", typ)))?;
         let handle = stream.read_u64::<BE>()?;
         let offset = stream.read_u64::<BE>()?;
         let len = stream.read_u32::<BE>()?;
@@ -172,7 +183,9 @@ impl Request {
                     }
                     .put(&mut stream)?;
                     // TODO: probably shouldn't terminate in this case?
-                    return other_error(format!("large write request of length {}", len));
+                    bail!(ProtocolError(format!(
+                        "large write request of length {len}"
+                    )));
                 }
                 let mut buf = vec![0; len as usize];
                 stream.read_exact(&mut buf)?;
@@ -305,7 +318,7 @@ impl Server {
     }
 
     /// send export info at the end of newstyle negotiation, when client sends NBD_OPT_EXPORT_NAME
-    fn send_export_info<IO: Write>(&self, mut stream: IO) -> io::Result<()> {
+    fn send_export_info<IO: Write>(&self, mut stream: IO) -> Result<()> {
         stream.write_u64::<BE>(self.export.size()?)?;
         let transmit = TransmitFlags::HAS_FLAGS | TransmitFlags::SEND_FLUSH;
         stream.write_u16::<BE>(transmit.bits())?;
@@ -315,7 +328,7 @@ impl Server {
     }
 
     // after the initial handshake, "haggle" to agree on connection parameters
-    fn handshake_haggle<IO: Read + Write>(&self, mut stream: IO) -> io::Result<&Export> {
+    fn handshake_haggle<IO: Read + Write>(&self, mut stream: IO) -> Result<&Export> {
         // only need to handle OPT_EXPORT_NAME, that will make the server functional
         loop {
             let opt = Opt::get(&mut stream)?;
@@ -327,7 +340,7 @@ impl Server {
                     if export != self.export.name {
                         // protocol has no way to recover from this (it is
                         // handled by NBD_OPT_GO, but that isn't supported)
-                        return other_error(format!("incorrect export name {export}"));
+                        bail!(ProtocolError(format!("incorrect export name {export}")));
                     }
                     self.send_export_info(&mut stream)?;
                     return Ok(&self.export);
@@ -339,7 +352,7 @@ impl Server {
         }
     }
 
-    fn handle_ops<IO: Read + Write>(export: &Export, mut stream: IO) -> io::Result<()> {
+    fn handle_ops<IO: Read + Write>(export: &Export, mut stream: IO) -> Result<()> {
         loop {
             let req = Request::get(&mut stream)?;
             match req.typ {
@@ -364,14 +377,14 @@ impl Server {
         }
     }
 
-    fn client<IO: Read + Write>(&self, mut stream: IO) -> io::Result<()> {
+    fn client<IO: Read + Write>(&self, mut stream: IO) -> Result<()> {
         Self::initial_handshake(&mut stream)?;
         let export = self.handshake_haggle(&mut stream)?;
         Server::handle_ops(export, &mut stream)?;
         Ok(())
     }
 
-    pub fn start(self) -> io::Result<()> {
+    pub fn start(self) -> Result<()> {
         let addr = ("127.0.0.1", TCP_PORT);
         let listener = TcpListener::bind(addr)?;
         for stream in listener.incoming() {
