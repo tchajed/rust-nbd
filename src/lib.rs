@@ -1,5 +1,5 @@
 #![allow(clippy::upper_case_acronyms)]
-use color_eyre::eyre::{bail, ensure};
+use color_eyre::eyre::{bail, ensure, WrapErr};
 use color_eyre::Result;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::fmt;
@@ -357,11 +357,15 @@ impl Server {
             let req = Request::get(&mut stream)?;
             match req.typ {
                 Cmd::READ => {
-                    let data = export.read(req.offset, req.len)?;
+                    let data = export
+                        .read(req.offset, req.len)
+                        .wrap_err_with(|| format!("read at {} failed", req.offset))?;
                     SimpleReply::data(&req, data).put(&mut stream)?;
                 }
                 Cmd::WRITE => {
-                    export.write(req.offset, &req.data)?;
+                    export
+                        .write(req.offset, &req.data)
+                        .wrap_err_with(|| format!("write at {} failed", req.offset))?;
                     SimpleReply::ok(&req).put(&mut stream)?;
                 }
                 Cmd::DISCONNECT => return Ok(()),
@@ -378,8 +382,10 @@ impl Server {
     }
 
     fn client<IO: Read + Write>(&self, mut stream: IO) -> Result<()> {
-        Self::initial_handshake(&mut stream)?;
-        let export = self.handshake_haggle(&mut stream)?;
+        Self::initial_handshake(&mut stream).wrap_err("initial handshake failed")?;
+        let export = self
+            .handshake_haggle(&mut stream)
+            .wrap_err("handshake haggling failed")?;
         Server::handle_ops(export, &mut stream)?;
         Ok(())
     }

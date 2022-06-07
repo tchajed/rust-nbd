@@ -4,6 +4,7 @@ use std::fs::OpenOptions;
 use nbd::{Export, Server};
 
 fn main() -> Result<()> {
+    color_eyre::install()?;
     let file = OpenOptions::new()
         .read(true)
         .write(true)
