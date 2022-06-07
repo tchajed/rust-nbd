@@ -49,7 +49,7 @@ bitflags! {
 #[derive(IntoPrimitive, TryFromPrimitive, Debug)]
 #[repr(u32)]
 #[allow(non_camel_case_types)]
-enum OptionType {
+enum OptType {
     EXPORT_NAME = 1,
     ABORT = 2,
     LIST = 3,
@@ -76,19 +76,19 @@ where
     Err(io::Error::new(io::ErrorKind::Other, e))
 }
 
-struct Option {
-    typ: OptionType,
+struct Opt {
+    typ: OptType,
     data: Vec<u8>,
 }
 
-impl Option {
+impl Opt {
     fn get<IO: Read>(mut stream: IO) -> io::Result<Self> {
         let magic = stream.read_u64::<BE>()?;
         if magic != IHAVEOPT {
             return other_error(format!("unexpected option magic {magic}"));
         }
         let option = stream.read_u32::<BE>()?;
-        let typ = OptionType::try_from(option)
+        let typ = OptType::try_from(option)
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "unexpected option"))?;
         let option_len = stream.read_u32::<BE>()?;
         if option_len > 100000 {
@@ -288,7 +288,7 @@ impl Server {
 
     fn reply<IO: Write>(
         mut stream: IO,
-        opt: OptionType,
+        opt: OptType,
         reply_type: ReplyType,
         data: &[u8],
     ) -> io::Result<()> {
@@ -315,9 +315,9 @@ impl Server {
     fn handshake_haggle<IO: Read + Write>(&self, mut stream: IO) -> io::Result<&Export> {
         // only need to handle OPT_EXPORT_NAME, that will make the server functional
         loop {
-            let opt = Option::get(&mut stream)?;
+            let opt = Opt::get(&mut stream)?;
             match opt.typ {
-                OptionType::EXPORT_NAME => {
+                OptType::EXPORT_NAME => {
                     let export: String = String::from_utf8(opt.data).map_err(|_| {
                         io::Error::new(io::ErrorKind::Other, "non-UTF8 export name")
                     })?;
