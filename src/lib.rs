@@ -83,6 +83,12 @@ enum ReplyType {
     ACK = 1,
     SERVER = 2,
     ERR_UNSUP = (1 << 31) + 1,
+    ERR_POLICY = (1 << 31) + 2,
+    ERR_INVALID = (1 << 31) + 3,
+    ERR_TLS_REQD = (1 << 31) + 5,
+    ERR_UNKNOWN = (1 << 31) + 6,
+    ERR_SHUTDOWN = (1 << 31) + 7,
+    ERR_BLOCK_SIZE_REQD = (1 << 31) + 8,
     ERR_TOO_BIG = (1 << 31) + 9,
 }
 
@@ -104,7 +110,7 @@ impl Opt {
         }
         let option = stream.read_u32::<BE>()?;
         let typ = OptType::try_from(option)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "unexpected option"))?;
+            .map_err(|_| ProtocolError(format!("unexpected option {option}")))?;
         let option_len = stream.read_u32::<BE>()?;
         ensure!(
             option_len < 10_000,
@@ -268,7 +274,7 @@ impl SimpleReply {
         }
     }
 
-    fn put<IO: Write>(self, mut stream: IO) -> io::Result<()> {
+    fn put<IO: Write>(self, mut stream: IO) -> Result<()> {
         stream.write_u32::<BE>(SIMPLE_REPLY_MAGIC)?;
         stream.write_u32::<BE>(self.err.into())?;
         stream.write_u64::<BE>(self.handle)?;
@@ -283,29 +289,31 @@ pub struct Export {
     pub file: File,
 }
 
-fn extract_io_err<T>(r: io::Result<T>) -> Result<core::result::Result<T, ErrorType>> {
-    match r {
-        Ok(r) => Ok(Ok(r)),
-        Err(err) => match err.kind() {
-            ErrorKind::PermissionDenied => Ok(Err(ErrorType::EPERM)),
-            ErrorKind::InvalidInput => Ok(Err(ErrorType::EOVERFLOW)),
-            ErrorKind::UnexpectedEof => Ok(Err(ErrorType::EOVERFLOW)),
-            _ => {
-                warn!("unexpected error {}", err);
-                Ok(Err(ErrorType::EIO))
-            }
-        },
+fn extract_io_err(kind: ErrorKind) -> ErrorType {
+    match kind {
+        ErrorKind::PermissionDenied => ErrorType::EPERM,
+        ErrorKind::InvalidInput => ErrorType::EOVERFLOW,
+        ErrorKind::UnexpectedEof => ErrorType::EOVERFLOW,
+        _ => {
+            warn!("unexpected error {}", kind);
+            ErrorType::EIO
+        }
     }
 }
 
 impl Export {
-    fn read(&self, off: u64, len: u32) -> Result<core::result::Result<Vec<u8>, ErrorType>> {
+    fn read(&self, off: u64, len: u32) -> core::result::Result<Vec<u8>, ErrorType> {
         let mut buf = vec![0; len as usize];
-        extract_io_err(self.file.read_exact_at(&mut buf, off)).map(|r| r.map(|_| buf))
+        match self.file.read_at(&mut buf, off) {
+            Ok(_) => Ok(buf),
+            Err(err) => Err(extract_io_err(err.kind())),
+        }
     }
 
-    fn write(&self, off: u64, data: &[u8]) -> Result<core::result::Result<(), ErrorType>> {
-        extract_io_err(self.file.write_all_at(data, off))
+    fn write(&self, off: u64, data: &[u8]) -> core::result::Result<(), ErrorType> {
+        self.file
+            .write_all_at(data, off)
+            .map_err(|err| extract_io_err(err.kind()))
     }
 
     fn flush(&self) -> io::Result<()> {
@@ -353,6 +361,13 @@ impl Server {
         reply_type: ReplyType,
         data: &[u8],
     ) -> io::Result<()> {
+        //     The server will reply to any option apart from NBD_OPT_EXPORT_NAME with reply packets in the following format:
+        //
+        // S: 64 bits, 0x3e889045565a9 (magic number for replies)
+        // S: 32 bits, the option as sent by the client to which this is a reply
+        // S: 32 bits, reply type (e.g., NBD_REP_ACK for successful completion, or NBD_REP_ERR_UNSUP to mark use of an option not known by this server
+        // S: 32 bits, length of the reply. This MAY be zero for some replies, in which case the next field is not sent
+        // S: any data as required by the reply (e.g., an export name in the case of NBD_REP_SERVER)
         stream.write_u64::<BE>(REPLY_MAGIC)?;
         stream.write_u32::<BE>(opt.into())?;
         stream.write_u32::<BE>(reply_type.into())?;
@@ -386,18 +401,18 @@ impl Server {
             let opt = Opt::get(&mut stream)?;
             match opt.typ {
                 OptType::EXPORT_NAME => {
-                    let export: String = String::from_utf8(opt.data).map_err(|_| {
-                        io::Error::new(io::ErrorKind::Other, "non-UTF8 export name")
-                    })?;
+                    let export: String = String::from_utf8(opt.data)
+                        .wrap_err(ProtocolError("non-UTF8 export name".to_string()))?;
                     if export != self.export.name {
                         // protocol has no way to recover from this (it is
-                        // handled by NBD_OPT_GO, but that isn't supported)
+                        // handled by NBD_OPT_GO, but we don't support that)
                         bail!(ProtocolError(format!("incorrect export name {export}")));
                     }
                     self.send_export_info(&mut stream)?;
                     return Ok(&self.export);
                 }
                 _ => {
+                    warn!("got unsupported option {:?}", opt);
                     Self::reply(&mut stream, opt.typ, ReplyType::ERR_UNSUP, &[])?;
                 }
             }
@@ -409,7 +424,7 @@ impl Server {
             let req = Request::get(&mut stream)?;
             info!(target: "nbd", "{:?}", req);
             match req.typ {
-                Cmd::READ => match export.read(req.offset, req.len)? {
+                Cmd::READ => match export.read(req.offset, req.len) {
                     Ok(data) => SimpleReply::data(&req, data).put(&mut stream)?,
                     Err(err) => SimpleReply::err(err, &req).put(&mut stream)?,
                 },
@@ -418,10 +433,7 @@ impl Server {
                         SimpleReply::err(ErrorType::EOVERFLOW, &req).put(&mut stream)?;
                         return Ok(());
                     }
-                    match export
-                        .write(req.offset, &req.data)
-                        .wrap_err_with(|| format!("write at {} failed", req.offset))?
-                    {
+                    match export.write(req.offset, &req.data) {
                         Ok(_) => SimpleReply::ok(&req).put(&mut stream)?,
                         Err(err) => SimpleReply::err(err, &req).put(&mut stream)?,
                     }
@@ -458,7 +470,7 @@ impl Server {
             // TODO: how to process clients in parallel? self has to be shared among threads
             match self.client(stream) {
                 Ok(_) => info!(target: "nbd", "client disconnected"),
-                Err(err) => eprintln!("error handling client:\n{err}"),
+                Err(err) => eprintln!("error handling client:\n{}", err),
             }
         }
         Ok(())
