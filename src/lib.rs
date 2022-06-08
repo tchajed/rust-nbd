@@ -1,6 +1,7 @@
 #![allow(clippy::upper_case_acronyms)]
 use color_eyre::eyre::{bail, ensure, WrapErr};
 use color_eyre::Result;
+use log::info;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::fmt;
 use std::io::prelude::*;
@@ -379,7 +380,7 @@ impl Server {
     fn handle_ops<IO: Read + Write>(export: &Export, mut stream: IO) -> Result<()> {
         loop {
             let req = Request::get(&mut stream)?;
-            println!("{:?}", req);
+            info!(target: "nbd", "{:?}", req);
             match req.typ {
                 Cmd::READ => {
                     let data = export
@@ -421,10 +422,10 @@ impl Server {
         for stream in listener.incoming() {
             let stream = stream?;
             stream.set_nodelay(true)?;
-            println!("client connected");
+            info!(target: "nbd", "client connected");
             // TODO: how to process clients in parallel? self has to be shared among threads
             match self.client(stream) {
-                Ok(_) => println!("disconnect"),
+                Ok(_) => info!(target: "nbd", "client disconnected"),
                 Err(err) => eprintln!("error handling client:\n{err}"),
             }
         }

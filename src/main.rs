@@ -5,6 +5,8 @@ use nbd::{Export, Server};
 
 fn main() -> Result<()> {
     color_eyre::install()?;
+    env_logger::init();
+
     let file = OpenOptions::new()
         .read(true)
         .write(true)
