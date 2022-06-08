@@ -10,9 +10,6 @@ struct Args {
     #[clap(long)]
     no_create: bool,
 
-    #[clap(long, default_value = "default")]
-    export: String,
-
     #[clap(short, long, default_value_t = 10)]
     size: usize,
 
@@ -37,7 +34,7 @@ fn main() -> Result<()> {
     file.set_len(size_bytes)?;
 
     let export = Export {
-        name: args.export,
+        name: "default".to_string(),
         file,
     };
     Server::new(export).start()?;

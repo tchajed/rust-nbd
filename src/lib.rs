@@ -77,11 +77,22 @@ enum OptType {
 }
 
 #[derive(IntoPrimitive, TryFromPrimitive, Debug, Copy, Clone)]
+#[repr(u16)]
+#[allow(non_camel_case_types)]
+enum InfoType {
+    EXPORT = 0,
+    NAME = 1,
+    DESCRIPTION = 2,
+    BLOCK_SIZE = 3,
+}
+
+#[derive(IntoPrimitive, TryFromPrimitive, Debug, Copy, Clone)]
 #[repr(u32)]
 #[allow(non_camel_case_types)]
 enum ReplyType {
     ACK = 1,
     SERVER = 2,
+    INFO = 3,
     ERR_UNSUP = (1 << 31) + 1,
     ERR_POLICY = (1 << 31) + 2,
     ERR_INVALID = (1 << 31) + 3,
@@ -377,6 +388,20 @@ impl Server {
         Ok(())
     }
 
+    fn send_export_list<IO: Write>(&self, mut stream: IO) -> Result<()> {
+        // Return zero or more NBD_REP_SERVER replies, one for each export,
+        // followed by NBD_REP_ACK or an error (such as NBD_REP_ERR_SHUTDOWN).
+        // The server MAY omit entries from this list if TLS has not been
+        // negotiated, the server is operating in SELECTIVETLS mode, and the
+        // entry concerned is a TLS-only export.
+        let mut data = vec![];
+        data.write_u32::<BE>(self.export.name.len() as u32)?;
+        data.write_all(self.export.name.as_bytes())?;
+        Self::reply(&mut stream, OptType::LIST, ReplyType::SERVER, &data)?;
+        Self::reply(&mut stream, OptType::LIST, ReplyType::ACK, &[])?;
+        Ok(())
+    }
+
     /// send export info at the end of newstyle negotiation, when client sends NBD_OPT_EXPORT_NAME
     fn send_export_info<IO: Write>(&self, mut stream: IO) -> Result<()> {
         // If the value of the option field is `NBD_OPT_EXPORT_NAME` and the
@@ -395,21 +420,29 @@ impl Server {
     }
 
     // after the initial handshake, "haggle" to agree on connection parameters
-    fn handshake_haggle<IO: Read + Write>(&self, mut stream: IO) -> Result<&Export> {
+    //
+    // If this returns None, then the client wants to disconnect
+    fn handshake_haggle<IO: Read + Write>(&self, mut stream: IO) -> Result<Option<&Export>> {
         // only need to handle OPT_EXPORT_NAME, that will make the server functional
         loop {
             let opt = Opt::get(&mut stream)?;
             match opt.typ {
                 OptType::EXPORT_NAME => {
-                    let export: String = String::from_utf8(opt.data)
+                    let _export: String = String::from_utf8(opt.data)
                         .wrap_err(ProtocolError("non-UTF8 export name".to_string()))?;
-                    if export != self.export.name {
-                        // protocol has no way to recover from this (it is
-                        // handled by NBD_OPT_GO, but we don't support that)
-                        bail!(ProtocolError(format!("incorrect export name {export}")));
-                    }
+                    // if export != self.export.name {
+                    //     // protocol has no way to recover from this (it is
+                    //     // handled by NBD_OPT_GO, but we don't support that)
+                    //     bail!(ProtocolError(format!("incorrect export name {export}")));
+                    // }
                     self.send_export_info(&mut stream)?;
-                    return Ok(&self.export);
+                    return Ok(Some(&self.export));
+                }
+                OptType::LIST => {
+                    self.send_export_list(&mut stream)?;
+                }
+                OptType::ABORT => {
+                    return Ok(None);
                 }
                 _ => {
                     warn!("got unsupported option {:?}", opt);
@@ -453,10 +486,12 @@ impl Server {
 
     fn client<IO: Read + Write>(&self, mut stream: IO) -> Result<()> {
         Self::initial_handshake(&mut stream).wrap_err("initial handshake failed")?;
-        let export = self
+        if let Some(export) = self
             .handshake_haggle(&mut stream)
-            .wrap_err("handshake haggling failed")?;
-        Server::handle_ops(export, &mut stream).wrap_err("handling client operations")?;
+            .wrap_err("handshake haggling failed")?
+        {
+            Server::handle_ops(export, &mut stream).wrap_err("handling client operations")?;
+        }
         Ok(())
     }
 
