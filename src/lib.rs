@@ -304,8 +304,8 @@ impl SimpleReply {
     }
 }
 
-#[derive(Debug)]
 /// A file to be exported as a block device.
+#[derive(Debug)]
 pub struct Export {
     /// name of the export (only used for listing)
     pub name: String,
@@ -353,8 +353,8 @@ impl Export {
     }
 }
 
-#[derive(Debug)]
 /// Server implements the NBD protocol, with a single export.
+#[derive(Debug)]
 pub struct Server {
     export: Export,
 }
@@ -367,20 +367,24 @@ impl Server {
 
     // agree on basic negotiation flags (only fixed newstyle is supported so
     // this returns a unit)
-    fn initial_handshake<IO: Read + Write>(mut stream: IO) -> Result<()> {
+    fn initial_handshake<IO: Read + Write>(mut stream: IO) -> Result<HandshakeFlags> {
         stream.write_u64::<BE>(MAGIC)?;
         stream.write_u64::<BE>(IHAVEOPT)?;
-        stream.write_u16::<BE>(HandshakeFlags::FIXED_NEWSTYLE.bits)?;
+        stream
+            .write_u16::<BE>((HandshakeFlags::FIXED_NEWSTYLE | HandshakeFlags::NO_ZEROES).bits)?;
         let client_flags = stream.read_u32::<BE>()?;
         let client_flags = ClientHandshakeFlags::from_bits(client_flags)
             .ok_or_else(|| ProtocolError(format!("unexpected client flags {}", client_flags)))?;
-        if client_flags != ClientHandshakeFlags::C_FIXED_NEWSTYLE {
-            bail!(ProtocolError(format!(
-                "client has unsupported flags {:?}",
-                client_flags
-            )));
+        if !client_flags.contains(ClientHandshakeFlags::C_FIXED_NEWSTYLE) {
+            bail!(ProtocolError(
+                "client does not support FIXED_NEWSTYLE".to_string()
+            ));
         }
-        Ok(())
+        let mut flags = HandshakeFlags::FIXED_NEWSTYLE;
+        if client_flags.contains(ClientHandshakeFlags::C_NO_ZEROES) {
+            flags |= HandshakeFlags::NO_ZEROES;
+        }
+        Ok(flags)
     }
 
     fn reply<IO: Write>(
@@ -405,6 +409,7 @@ impl Server {
         Ok(())
     }
 
+    /// reply to a OptType::LIST option request
     fn send_export_list<IO: Write>(&self, mut stream: IO) -> Result<()> {
         // Return zero or more NBD_REP_SERVER replies, one for each export,
         // followed by NBD_REP_ACK or an error (such as NBD_REP_ERR_SHUTDOWN).
@@ -420,7 +425,7 @@ impl Server {
     }
 
     /// send export info at the end of newstyle negotiation, when client sends NBD_OPT_EXPORT_NAME
-    fn send_export_info<IO: Write>(&self, mut stream: IO) -> Result<()> {
+    fn send_export_info<IO: Write>(&self, mut stream: IO, flags: HandshakeFlags) -> Result<()> {
         // If the value of the option field is `NBD_OPT_EXPORT_NAME` and the
         // server is willing to allow the export, the server replies with
         // information about the used export:
@@ -431,28 +436,30 @@ impl Server {
         stream.write_u64::<BE>(self.export.size()?)?;
         let transmit = TransmitFlags::HAS_FLAGS | TransmitFlags::SEND_FLUSH;
         stream.write_u16::<BE>(transmit.bits())?;
-        stream.write_all(&[0u8; 124])?;
+        if !flags.contains(HandshakeFlags::NO_ZEROES) {
+            stream.write_all(&[0u8; 124])?;
+        }
         stream.flush()?;
         Ok(())
     }
 
-    // after the initial handshake, "haggle" to agree on connection parameters
+    /// After the initial handshake, "haggle" to agree on connection parameters.
     //
-    // If this returns None, then the client wants to disconnect
-    fn handshake_haggle<IO: Read + Write>(&self, mut stream: IO) -> Result<Option<&Export>> {
-        // only need to handle OPT_EXPORT_NAME, that will make the server functional
+    /// If this returns Ok(None), then the client wants to disconnect
+    fn handshake_haggle<IO: Read + Write>(
+        &self,
+        mut stream: IO,
+        flags: HandshakeFlags,
+    ) -> Result<Option<&Export>> {
         loop {
             let opt = Opt::get(&mut stream)?;
             match opt.typ {
                 OptType::EXPORT_NAME => {
                     let _export: String = String::from_utf8(opt.data)
                         .wrap_err(ProtocolError("non-UTF8 export name".to_string()))?;
-                    // if export != self.export.name {
-                    //     // protocol has no way to recover from this (it is
-                    //     // handled by NBD_OPT_GO, but we don't support that)
-                    //     bail!(ProtocolError(format!("incorrect export name {export}")));
-                    // }
-                    self.send_export_info(&mut stream)?;
+                    // requested export name is currently ignored since there is
+                    // only a single export
+                    self.send_export_info(&mut stream, flags)?;
                     return Ok(Some(&self.export));
                 }
                 OptType::LIST => {
@@ -502,9 +509,9 @@ impl Server {
     }
 
     fn client<IO: Read + Write>(&self, mut stream: IO) -> Result<()> {
-        Self::initial_handshake(&mut stream).wrap_err("initial handshake failed")?;
+        let flags = Self::initial_handshake(&mut stream).wrap_err("initial handshake failed")?;
         if let Some(export) = self
-            .handshake_haggle(&mut stream)
+            .handshake_haggle(&mut stream, flags)
             .wrap_err("handshake haggling failed")?
         {
             Server::handle_ops(export, &mut stream).wrap_err("handling client operations")?;
