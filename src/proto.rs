@@ -405,7 +405,7 @@ impl<'a> SimpleReply<'a> {
         stream.write_u32::<BE>(SIMPLE_REPLY_MAGIC)?;
         stream.write_u32::<BE>(self.err.into())?;
         stream.write_u64::<BE>(self.handle)?;
-        stream.write_all(&self.data)?;
+        stream.write_all(self.data)?;
         Ok(())
     }
 }
