@@ -152,7 +152,6 @@ bitflags! {
     }
 }
 
-#[derive(Debug)]
 struct Request {
     // parsed in case we need them later
     #[allow(dead_code)]
@@ -162,6 +161,23 @@ struct Request {
     offset: u64,
     len: u32, // used for READ (redundant for WRITE)
     data: Vec<u8>,
+}
+
+impl fmt::Debug for Request {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut f = &mut f.debug_struct("Request");
+        if !self.flags.is_empty() {
+            f = f.field("flags", &self.flags);
+        }
+        f = f
+            .field("typ", &self.typ)
+            // .field("handle", &self.handle)
+            .field("offset", &self.offset);
+        if !self.data.is_empty() {
+            f = f.field("data", &self.data);
+        }
+        f.finish_non_exhaustive()
+    }
 }
 
 impl Request {
