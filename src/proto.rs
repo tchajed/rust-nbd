@@ -2,7 +2,7 @@
 //!
 //! See <https://github.com/NetworkBlockDevice/nbd/blob/master/doc/proto.md> for
 //! the protocol description.
-#![allow(missing_docs)]
+#![deny(missing_docs)]
 #![allow(clippy::upper_case_acronyms)]
 #![allow(non_camel_case_types)]
 use color_eyre::eyre::{bail, ensure, WrapErr};
@@ -183,6 +183,60 @@ impl Opt {
     }
 }
 
+/// Builder for reply to a OptType::LIST option request
+#[must_use]
+pub(super) struct ExportList {
+    export_names: Vec<String>,
+}
+
+impl ExportList {
+    pub fn new(export_names: Vec<String>) -> Self {
+        Self { export_names }
+    }
+    pub fn put<IO: Write>(self, mut stream: IO) -> Result<()> {
+        // Return zero or more NBD_REP_SERVER replies, one for each export,
+        // followed by NBD_REP_ACK or an error (such as NBD_REP_ERR_SHUTDOWN).
+        // The server MAY omit entries from this list if TLS has not been
+        // negotiated, the server is operating in SELECTIVETLS mode, and the
+        // entry concerned is a TLS-only export.
+        for name in self.export_names.into_iter() {
+            let mut data = vec![];
+            data.write_u32::<BE>(name.len() as u32)?;
+            data.write_all(name.as_bytes())?;
+            OptReply::new(OptType::LIST, ReplyType::SERVER, data).put(&mut stream)?;
+            OptReply::ack(OptType::LIST).put(&mut stream)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct InfoRequest {
+    // we just ignore the requested export names in general
+    #[allow(dead_code)]
+    pub name: String,
+    pub typs: Vec<InfoType>,
+}
+
+impl InfoRequest {
+    pub fn get<IO: Read>(mut stream: IO) -> Result<Self> {
+        let name_len = stream.read_u32::<BE>()?;
+        let mut buf = vec![0; name_len as usize];
+        stream.read_exact(&mut buf)?;
+        let name = String::from_utf8(buf)
+            .wrap_err(ProtocolError::new("invalid UTF-8 in requested export"))?;
+        let num_requests = stream.read_u16::<BE>()?;
+        let mut typs = vec![];
+        for _ in 0..num_requests {
+            let typ = stream.read_u16::<BE>()?;
+            let typ = InfoType::try_from(typ)
+                .map_err(|_| ProtocolError::new("invalid info type {typ}"))?;
+            typs.push(typ);
+        }
+        Ok(InfoRequest { name, typs })
+    }
+}
+
 // -------------------
 // Transmission phase
 // -------------------
@@ -319,6 +373,7 @@ impl ErrorType {
 }
 
 #[derive(Debug)]
+#[must_use]
 pub(super) struct SimpleReply<'a> {
     err: ErrorType,
     handle: u64,

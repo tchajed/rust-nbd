@@ -92,18 +92,8 @@ impl Server {
         Ok(flags)
     }
 
-    /// reply to a OptType::LIST option request
     fn send_export_list<IO: Write>(&self, mut stream: IO) -> Result<()> {
-        // Return zero or more NBD_REP_SERVER replies, one for each export,
-        // followed by NBD_REP_ACK or an error (such as NBD_REP_ERR_SHUTDOWN).
-        // The server MAY omit entries from this list if TLS has not been
-        // negotiated, the server is operating in SELECTIVETLS mode, and the
-        // entry concerned is a TLS-only export.
-        let mut data = vec![];
-        data.write_u32::<BE>(self.export.name.len() as u32)?;
-        data.write_all(self.export.name.as_bytes())?;
-        OptReply::new(OptType::LIST, ReplyType::SERVER, data).put(&mut stream)?;
-        OptReply::ack(OptType::LIST).put(&mut stream)?;
+        ExportList::new(vec![self.export.name.clone()]).put(&mut stream)?;
         Ok(())
     }
 
@@ -123,6 +113,29 @@ impl Server {
             stream.write_all(&[0u8; 124])?;
         }
         stream.flush()?;
+        Ok(())
+    }
+
+    fn info_responses<IO: Write>(
+        &self,
+        opt_typ: OptType,
+        info_req: InfoRequest,
+        mut stream: IO,
+    ) -> Result<()> {
+        for typ in info_req.typs.iter().chain([InfoType::EXPORT].iter()) {
+            match typ {
+                InfoType::EXPORT => {
+                    let mut buf = vec![];
+                    buf.write_u16::<BE>(InfoType::EXPORT.into())?;
+                    buf.write_u64::<BE>(self.export.size()? as u64)?;
+                    OptReply::new(opt_typ, ReplyType::INFO, buf).put(&mut stream)?;
+                }
+                InfoType::NAME => todo!(),
+                InfoType::DESCRIPTION => todo!(),
+                InfoType::BLOCK_SIZE => todo!(),
+            }
+        }
+        OptReply::ack(opt_typ).put(&mut stream)?;
         Ok(())
     }
 
@@ -147,6 +160,17 @@ impl Server {
                 }
                 OptType::LIST => {
                     self.send_export_list(&mut stream)?;
+                }
+                // the only difference between INFO and GO is that on success,
+                // GO starts the transmission phase
+                OptType::INFO => {
+                    let info_req = InfoRequest::get(&opt.data[..])?;
+                    self.info_responses(opt.typ, info_req, &mut stream)?;
+                }
+                OptType::GO => {
+                    let info_req = InfoRequest::get(&opt.data[..])?;
+                    self.info_responses(opt.typ, info_req, &mut stream)?;
+                    return Ok(Some(&self.export));
                 }
                 OptType::ABORT => {
                     return Ok(None);
