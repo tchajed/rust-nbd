@@ -191,7 +191,7 @@ impl fmt::Debug for Request {
         }
         f = f.field("typ", &self.typ);
         // .field("handle", &self.handle);
-        if !(self.typ == Cmd::READ || self.typ == Cmd::WRITE) {
+        if self.typ == Cmd::READ || self.typ == Cmd::WRITE {
             f = f.field("offset", &self.offset);
         }
         if !self.data.is_empty() {
@@ -510,6 +510,7 @@ impl Server {
 
     fn client<IO: Read + Write>(&self, mut stream: IO) -> Result<()> {
         let flags = Self::initial_handshake(&mut stream).wrap_err("initial handshake failed")?;
+        info!("handshake with {:?}", flags);
         if let Some(export) = self
             .handshake_haggle(&mut stream, flags)
             .wrap_err("handshake haggling failed")?
