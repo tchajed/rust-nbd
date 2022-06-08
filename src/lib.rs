@@ -1,10 +1,10 @@
 #![allow(clippy::upper_case_acronyms)]
 use color_eyre::eyre::{bail, ensure, WrapErr};
 use color_eyre::Result;
-use log::info;
+use log::{info, warn};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::fmt;
-use std::io::prelude::*;
+use std::io::{prelude::*, ErrorKind};
 use std::net::TcpListener;
 use std::os::unix::prelude::FileExt;
 use std::{fs::File, io};
@@ -175,6 +175,8 @@ impl fmt::Debug for Request {
 }
 
 impl Request {
+    const MAX_WRITE_SIZE: u32 = 100_000_000;
+
     fn get<IO: Read + Write>(mut stream: IO) -> Result<Self> {
         // C: 32 bits, 0x25609513, magic (NBD_REQUEST_MAGIC)
         // C: 16 bits, command flags
@@ -201,19 +203,8 @@ impl Request {
         let len = stream.read_u32::<BE>()?;
         let data = {
             if typ == Cmd::WRITE {
-                if len > 100_000_000 {
-                    SimpleReply {
-                        err: ErrorType::EOVERFLOW,
-                        handle,
-                        data: vec![],
-                    }
-                    .put(&mut stream)?;
-                    // TODO: probably shouldn't terminate in this case?
-                    bail!(ProtocolError(format!(
-                        "large write request of length {len}"
-                    )));
-                }
-                let mut buf = vec![0; len as usize];
+                let read_len = len.min(Self::MAX_WRITE_SIZE);
+                let mut buf = vec![0; read_len as usize];
                 stream
                     .read_exact(&mut buf)
                     .wrap_err_with(|| format!("parsing write request of length {len}"))?;
@@ -238,10 +229,14 @@ impl Request {
 #[allow(non_camel_case_types)]
 enum ErrorType {
     OK = 0,
+    EPERM = 1,
+    EIO = 5,
+    ENOMEM = 12,
     EINVAL = 22,
     ENOSPC = 28,
     EOVERFLOW = 75,
     ENOTSUP = 95,
+    ESHUTDOWN = 108,
 }
 
 #[derive(Debug)]
@@ -265,6 +260,14 @@ impl SimpleReply {
         Self::data(req, vec![])
     }
 
+    fn err(err: ErrorType, req: &Request) -> Self {
+        SimpleReply {
+            err,
+            handle: req.handle,
+            data: vec![],
+        }
+    }
+
     fn put<IO: Write>(self, mut stream: IO) -> io::Result<()> {
         stream.write_u32::<BE>(SIMPLE_REPLY_MAGIC)?;
         stream.write_u32::<BE>(self.err.into())?;
@@ -280,16 +283,29 @@ pub struct Export {
     pub file: File,
 }
 
+fn extract_io_err<T>(r: io::Result<T>) -> Result<core::result::Result<T, ErrorType>> {
+    match r {
+        Ok(r) => Ok(Ok(r)),
+        Err(err) => match err.kind() {
+            ErrorKind::PermissionDenied => Ok(Err(ErrorType::EPERM)),
+            ErrorKind::InvalidInput => Ok(Err(ErrorType::EOVERFLOW)),
+            ErrorKind::UnexpectedEof => Ok(Err(ErrorType::EOVERFLOW)),
+            _ => {
+                warn!("unexpected error {}", err);
+                Ok(Err(ErrorType::EIO))
+            }
+        },
+    }
+}
+
 impl Export {
-    fn read(&self, off: u64, len: u32) -> io::Result<Vec<u8>> {
+    fn read(&self, off: u64, len: u32) -> Result<core::result::Result<Vec<u8>, ErrorType>> {
         let mut buf = vec![0; len as usize];
-        self.file.read_exact_at(&mut buf, off)?;
-        Ok(buf)
+        extract_io_err(self.file.read_exact_at(&mut buf, off)).map(|r| r.map(|_| buf))
     }
 
-    fn write(&self, off: u64, data: &[u8]) -> io::Result<()> {
-        self.file.write_all_at(data, off)?;
-        Ok(())
+    fn write(&self, off: u64, data: &[u8]) -> Result<core::result::Result<(), ErrorType>> {
+        extract_io_err(self.file.write_all_at(data, off))
     }
 
     fn flush(&self) -> io::Result<()> {
@@ -393,17 +409,22 @@ impl Server {
             let req = Request::get(&mut stream)?;
             info!(target: "nbd", "{:?}", req);
             match req.typ {
-                Cmd::READ => {
-                    let data = export
-                        .read(req.offset, req.len)
-                        .wrap_err_with(|| format!("read at {} failed", req.offset))?;
-                    SimpleReply::data(&req, data).put(&mut stream)?;
-                }
+                Cmd::READ => match export.read(req.offset, req.len)? {
+                    Ok(data) => SimpleReply::data(&req, data).put(&mut stream)?,
+                    Err(err) => SimpleReply::err(err, &req).put(&mut stream)?,
+                },
                 Cmd::WRITE => {
-                    export
+                    if req.len as usize > req.data.len() {
+                        SimpleReply::err(ErrorType::EOVERFLOW, &req).put(&mut stream)?;
+                        return Ok(());
+                    }
+                    match export
                         .write(req.offset, &req.data)
-                        .wrap_err_with(|| format!("write at {} failed", req.offset))?;
-                    SimpleReply::ok(&req).put(&mut stream)?;
+                        .wrap_err_with(|| format!("write at {} failed", req.offset))?
+                    {
+                        Ok(_) => SimpleReply::ok(&req).put(&mut stream)?,
+                        Err(err) => SimpleReply::err(err, &req).put(&mut stream)?,
+                    }
                 }
                 Cmd::DISCONNECT => return Ok(()),
                 Cmd::FLUSH => {
