@@ -8,6 +8,7 @@
 use color_eyre::eyre::{bail, ensure, WrapErr};
 use color_eyre::Result;
 use log::warn;
+use rand::Rng;
 use std::error::Error;
 use std::fmt;
 use std::io::{self, prelude::*, ErrorKind};
@@ -181,6 +182,14 @@ impl Opt {
             .wrap_err_with(|| format!("reading option {:?} of size {option_len}", typ))?;
         Ok(Self { typ, data })
     }
+
+    pub fn put<IO: Write>(self, stream: &mut IO) -> Result<()> {
+        stream.write_u64::<BE>(IHAVEOPT)?;
+        stream.write_u32::<BE>(self.typ.into())?;
+        stream.write_u32::<BE>(self.data.len() as u32)?;
+        stream.write_all(&self.data)?;
+        Ok(())
+    }
 }
 
 /// Builder for reply to a OptType::LIST option request
@@ -241,7 +250,7 @@ impl InfoRequest {
 // Transmission phase
 // -------------------
 
-#[derive(IntoPrimitive, TryFromPrimitive, Debug, PartialEq, Eq)]
+#[derive(IntoPrimitive, TryFromPrimitive, Debug, PartialEq, Eq, Copy, Clone)]
 #[repr(u16)]
 pub(crate) enum Cmd {
     READ = 0,
@@ -303,6 +312,33 @@ impl fmt::Debug for Request {
 }
 
 impl Request {
+    pub fn new(typ: Cmd, offset: u64, len: u32) -> Self {
+        let handle = rand::thread_rng().gen::<u64>();
+        Request {
+            flags: CmdFlags::empty(),
+            typ,
+            handle,
+            offset,
+            len,
+            data_len: len as usize,
+        }
+    }
+
+    /// Send this request.
+    ///
+    /// data (required only for a Cmd::WRITE) is not part of a Request and must
+    /// be included separately.
+    pub fn put<IO: Write>(&self, data: &[u8], stream: &mut IO) -> Result<()> {
+        stream.write_u32::<BE>(REQUEST_MAGIC)?;
+        stream.write_u16::<BE>(self.flags.bits())?;
+        stream.write_u16::<BE>(self.typ.into())?;
+        stream.write_u64::<BE>(self.handle)?;
+        stream.write_u64::<BE>(self.offset)?;
+        stream.write_u32::<BE>(self.len)?;
+        stream.write_all(&data[..self.data_len])?;
+        Ok(())
+    }
+
     /// get reads the request using data as a local buffer if this is a write request
     pub fn get<IO: Read>(stream: &mut IO, buf: &mut [u8]) -> Result<Self> {
         // C: 32 bits, 0x25609513, magic (NBD_REQUEST_MAGIC)
@@ -348,7 +384,7 @@ impl Request {
     }
 }
 
-#[derive(IntoPrimitive, TryFromPrimitive, Debug)]
+#[derive(IntoPrimitive, TryFromPrimitive, Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub(crate) enum ErrorType {
     OK = 0,
@@ -379,9 +415,9 @@ impl ErrorType {
 #[derive(Debug)]
 #[must_use]
 pub(crate) struct SimpleReply<'a> {
-    err: ErrorType,
-    handle: u64,
-    data: &'a [u8],
+    pub err: ErrorType,
+    pub handle: u64,
+    pub data: &'a [u8],
 }
 
 impl<'a> SimpleReply<'a> {
@@ -405,7 +441,30 @@ impl<'a> SimpleReply<'a> {
         }
     }
 
+    pub fn get<IO: Read>(stream: &mut IO, buf: &'a mut [u8]) -> Result<Self> {
+        let magic = stream.read_u32::<BE>()?;
+        if magic != SIMPLE_REPLY_MAGIC {
+            bail!(ProtocolError::new(format!("wrong reply magic {magic}")));
+        }
+        let err = stream.read_u32::<BE>()?;
+        let err = ErrorType::try_from(err)
+            .map_err(|_| ProtocolError::new(format!("invalid error type {err}")))?;
+        let handle = stream.read_u64::<BE>()?;
+        stream.read_exact(buf)?;
+        Ok(Self {
+            err,
+            handle,
+            data: buf,
+        })
+    }
+
     pub fn put<IO: Write>(self, stream: &mut IO) -> Result<()> {
+        // The simple reply message MUST be sent by the server in response to all requests if structured replies have not been negotiated using NBD_OPT_STRUCTURED_REPLY. If structured replies have been negotiated, a simple reply MAY be used as a reply to any request other than NBD_CMD_READ, but only if the reply has no data payload. The message looks as follows:
+        //
+        // S: 32 bits, 0x67446698, magic (NBD_SIMPLE_REPLY_MAGIC; used to be NBD_REPLY_MAGIC)
+        // S: 32 bits, error (MAY be zero)
+        // S: 64 bits, handle
+        // S: (length bytes of data if the request is of type NBD_CMD_READ and error is zero)
         stream.write_u32::<BE>(SIMPLE_REPLY_MAGIC)?;
         stream.write_u32::<BE>(self.err.into())?;
         stream.write_u64::<BE>(self.handle)?;
