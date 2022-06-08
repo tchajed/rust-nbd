@@ -167,7 +167,10 @@ impl Server {
             match req.typ {
                 Cmd::READ => match export.read(req.offset, req.len, &mut req_buf) {
                     Ok(_) => SimpleReply::data(&req, &req_buf).put(&mut stream)?,
-                    Err(err) => SimpleReply::err(err, &req).put(&mut stream)?,
+                    Err(err) => {
+                        warn!(target: "nbd", "read error {:?}", err);
+                        SimpleReply::err(err, &req).put(&mut stream)?;
+                    }
                 },
                 Cmd::WRITE => {
                     let data = &req_buf[..req.data_len];
@@ -177,7 +180,10 @@ impl Server {
                     }
                     match export.write(req.offset, data) {
                         Ok(_) => SimpleReply::ok(&req).put(&mut stream)?,
-                        Err(err) => SimpleReply::err(err, &req).put(&mut stream)?,
+                        Err(err) => {
+                            warn!(target: "nbd", "write error {:?}", err);
+                            SimpleReply::err(err, &req).put(&mut stream)?;
+                        }
                     }
                 }
                 Cmd::DISCONNECT => return Ok(()),
@@ -200,6 +206,7 @@ impl Server {
             .handshake_haggle(&mut stream, flags)
             .wrap_err("handshake haggling failed")?
         {
+            info!("handshake finished");
             Server::handle_ops(export, &mut stream).wrap_err("handling client operations")?;
         }
         Ok(())
