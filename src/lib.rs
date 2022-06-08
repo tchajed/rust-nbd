@@ -1,3 +1,13 @@
+//! Network Block Device server, exporting an underlying file.
+//!
+//! Implements the most basic parts of the protocol: a single export,
+//! read/write/flush commands, and no other flags (eg, read-only or TLS
+//! support).
+//!
+//! See <https://github.com/NetworkBlockDevice/nbd/blob/master/doc/proto.md> for
+//! the protocol description.
+
+#![deny(missing_docs)]
 #![allow(clippy::upper_case_acronyms)]
 use color_eyre::eyre::{bail, ensure, WrapErr};
 use color_eyre::Result;
@@ -295,19 +305,24 @@ impl SimpleReply {
 }
 
 #[derive(Debug)]
+/// A file to be exported as a block device.
 pub struct Export {
+    /// name of the export (only used for listing)
     pub name: String,
+    /// file to be exported
     pub file: File,
 }
 
-fn extract_io_err(kind: ErrorKind) -> ErrorType {
-    match kind {
-        ErrorKind::PermissionDenied => ErrorType::EPERM,
-        ErrorKind::InvalidInput => ErrorType::EOVERFLOW,
-        ErrorKind::UnexpectedEof => ErrorType::EOVERFLOW,
-        _ => {
-            warn!("unexpected error {}", kind);
-            ErrorType::EIO
+impl ErrorType {
+    fn from_io_kind(kind: ErrorKind) -> Self {
+        match kind {
+            ErrorKind::PermissionDenied => Self::EPERM,
+            ErrorKind::InvalidInput => Self::EOVERFLOW,
+            ErrorKind::UnexpectedEof => Self::EOVERFLOW,
+            _ => {
+                warn!("unexpected error {}", kind);
+                Self::EIO
+            }
         }
     }
 }
@@ -317,14 +332,14 @@ impl Export {
         let mut buf = vec![0; len as usize];
         match self.file.read_at(&mut buf, off) {
             Ok(_) => Ok(buf),
-            Err(err) => Err(extract_io_err(err.kind())),
+            Err(err) => Err(ErrorType::from_io_kind(err.kind())),
         }
     }
 
     fn write(&self, off: u64, data: &[u8]) -> core::result::Result<(), ErrorType> {
         self.file
             .write_all_at(data, off)
-            .map_err(|err| extract_io_err(err.kind()))
+            .map_err(|err| ErrorType::from_io_kind(err.kind()))
     }
 
     fn flush(&self) -> io::Result<()> {
@@ -339,11 +354,13 @@ impl Export {
 }
 
 #[derive(Debug)]
+/// Server implements the NBD protocol, with a single export.
 pub struct Server {
     export: Export,
 }
 
 impl Server {
+    /// Create a Server for export
     pub fn new(export: Export) -> Self {
         Self { export }
     }
@@ -495,6 +512,10 @@ impl Server {
         Ok(())
     }
 
+    /// Start accepting connections from clients and processing commands.
+    ///
+    /// Currently accepts in a single thread, so only one client can be
+    /// connected at a time.
     pub fn start(self) -> Result<()> {
         let addr = ("127.0.0.1", TCP_PORT);
         let listener = TcpListener::bind(addr)?;
