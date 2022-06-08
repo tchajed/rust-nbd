@@ -174,7 +174,7 @@ impl fmt::Debug for Request {
             // .field("handle", &self.handle)
             .field("offset", &self.offset);
         if !self.data.is_empty() {
-            f = f.field("data", &self.data);
+            f = f.field("data.len", &self.data.len());
         }
         f.finish_non_exhaustive()
     }
