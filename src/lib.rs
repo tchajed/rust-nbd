@@ -100,6 +100,10 @@ struct Opt {
 
 impl Opt {
     fn get<IO: Read>(mut stream: IO) -> Result<Self> {
+        // C: 64 bits, 0x49484156454F5054 (ASCII 'IHAVEOPT') (note same newstyle handshake's magic number)
+        // C: 32 bits, option
+        // C: 32 bits, length of option data (unsigned)
+        // C: any data needed for the chosen option, of length as specified above.
         let magic = stream.read_u64::<BE>()?;
         if magic != IHAVEOPT {
             bail!(ProtocolError(format!("unexpected option magic {magic}")));
@@ -115,7 +119,7 @@ impl Opt {
         let mut data = vec![0u8; option_len as usize];
         stream
             .read_exact(&mut data)
-            .wrap_err_with(|| format!("reading option of size {option_len}"))?;
+            .wrap_err_with(|| format!("reading option {:?} of size {option_len}", typ))?;
         Ok(Self { typ, data })
     }
 }
@@ -332,6 +336,13 @@ impl Server {
 
     /// send export info at the end of newstyle negotiation, when client sends NBD_OPT_EXPORT_NAME
     fn send_export_info<IO: Write>(&self, mut stream: IO) -> Result<()> {
+        // If the value of the option field is `NBD_OPT_EXPORT_NAME` and the
+        // server is willing to allow the export, the server replies with
+        // information about the used export:
+        //
+        // S: 64 bits, size of the export in bytes (unsigned)
+        // S: 16 bits, transmission flags
+        // S: 124 bytes, zeroes (reserved) (unless `NBD_FLAG_C_NO_ZEROES` was negotiated by the client)
         stream.write_u64::<BE>(self.export.size()?)?;
         let transmit = TransmitFlags::HAS_FLAGS | TransmitFlags::SEND_FLUSH;
         stream.write_u16::<BE>(transmit.bits())?;
@@ -368,7 +379,7 @@ impl Server {
     fn handle_ops<IO: Read + Write>(export: &Export, mut stream: IO) -> Result<()> {
         loop {
             let req = Request::get(&mut stream)?;
-            println!("request {:?}", req);
+            println!("{:?}", req);
             match req.typ {
                 Cmd::READ => {
                     let data = export
@@ -400,7 +411,7 @@ impl Server {
         let export = self
             .handshake_haggle(&mut stream)
             .wrap_err("handshake haggling failed")?;
-        Server::handle_ops(export, &mut stream)?;
+        Server::handle_ops(export, &mut stream).wrap_err("handling client operations")?;
         Ok(())
     }
 
@@ -409,14 +420,12 @@ impl Server {
         let listener = TcpListener::bind(addr)?;
         for stream in listener.incoming() {
             let stream = stream?;
+            stream.set_nodelay(true)?;
             println!("client connected");
             // TODO: how to process clients in parallel? self has to be shared among threads
             match self.client(stream) {
                 Ok(_) => println!("disconnect"),
-                Err(err) => {
-                    // eprintln!("error handling client:\n{}", err)
-                    return Err(err);
-                }
+                Err(err) => eprintln!("error handling client:\n{err}"),
             }
         }
         Ok(())
