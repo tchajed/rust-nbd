@@ -125,14 +125,55 @@ impl Server {
         for typ in info_req.typs.iter().chain([InfoType::EXPORT].iter()) {
             match typ {
                 InfoType::EXPORT => {
+                    // Mandatory information before a successful completion of
+                    // NBD_OPT_INFO or NBD_OPT_GO. Describes the same
+                    // information that is sent in response to the older
+                    // NBD_OPT_EXPORT_NAME, except that there are no trailing
+                    // zeroes whether or not NBD_FLAG_C_NO_ZEROES was
+                    // negotiated. length MUST be 12, and the reply payload is
+                    // interpreted as follows:
+                    //
+                    // - 16 bits, NBD_INFO_EXPORT
+                    // - 64 bits, size of the export in bytes (unsigned)
+                    // - 16 bits, transmission flags
                     let mut buf = vec![];
                     buf.write_u16::<BE>(InfoType::EXPORT.into())?;
                     buf.write_u64::<BE>(self.export.size()? as u64)?;
                     OptReply::new(opt_typ, ReplyType::INFO, buf).put(&mut stream)?;
                 }
-                InfoType::NAME => todo!(),
-                InfoType::DESCRIPTION => todo!(),
-                InfoType::BLOCK_SIZE => todo!(),
+                InfoType::BLOCK_SIZE => {
+                    // Represents the server's advertised block size
+                    // constraints; see the "Block size constraints" section for
+                    // more details on what these values represent, and on
+                    // constraints on their values. The server MUST send this
+                    // info if it is requested and it intends to enforce block
+                    // size constraints other than the defaults. After sending
+                    // this information in response to an NBD_OPT_GO in which
+                    // the client specifically requested NBD_INFO_BLOCK_SIZE,
+                    // the server can legitimately assume that any client that
+                    // continues the session will support the block size
+                    // constraints supplied (note that this assumption cannot be
+                    // made solely on the basis of an NBD_OPT_INFO with an
+                    // NBD_INFO_BLOCK_SIZE request, or an NBD_OPT_GO without an
+                    // explicit NBD_INFO_BLOCK_SIZE request). The length MUST be
+                    // 14, and the reply payload is interpreted as:
+                    //
+                    //  -  16 bits, NBD_INFO_BLOCK_SIZE
+                    //  -  32 bits, minimum block size
+                    //  -  32 bits, preferred block size
+                    //  -  32 bits, maximum block size
+
+                    let mut buf = vec![];
+                    buf.write_u16::<BE>(InfoType::BLOCK_SIZE.into())?;
+                    buf.write_u32::<BE>(1)?; // minimum
+                    buf.write_u32::<BE>(4096)?; // preferred
+                    buf.write_u32::<BE>(4096 * 32)?; // maximum
+                    OptReply::new(opt_typ, ReplyType::INFO, buf).put(&mut stream)?;
+                }
+                InfoType::NAME | InfoType::DESCRIPTION => {
+                    OptReply::new(opt_typ, ReplyType::ERR_UNSUP, vec![]).put(&mut stream)?;
+                    return Ok(());
+                }
             }
         }
         OptReply::ack(opt_typ).put(&mut stream)?;
