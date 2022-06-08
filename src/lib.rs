@@ -279,7 +279,7 @@ impl Server {
         }
     }
 
-    fn client<IO: Read + Write>(&self, mut stream: IO) -> Result<()> {
+    fn handle_client<IO: Read + Write>(&self, mut stream: IO) -> Result<()> {
         let flags = Self::initial_handshake(&mut stream).wrap_err("initial handshake failed")?;
         info!("handshake with {:?}", flags);
         if let Some(export) = self
@@ -304,7 +304,7 @@ impl Server {
             stream.set_nodelay(true)?;
             info!(target: "nbd", "client connected");
             // TODO: how to process clients in parallel? self has to be shared among threads
-            match self.client(stream) {
+            match self.handle_client(stream) {
                 Ok(_) => info!(target: "nbd", "client disconnected"),
                 Err(err) => eprintln!("error handling client:\n{:?}", err),
             }
