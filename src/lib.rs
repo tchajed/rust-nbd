@@ -86,13 +86,6 @@ enum ReplyType {
     ERR_TOO_BIG = (1 << 31) + 9,
 }
 
-fn other_error<T, E>(e: E) -> io::Result<T>
-where
-    E: Into<Box<dyn Error + Send + Sync>>,
-{
-    Err(io::Error::new(io::ErrorKind::Other, e))
-}
-
 #[derive(Debug, Clone)]
 struct Opt {
     typ: OptType,
@@ -322,17 +315,18 @@ impl Server {
 
     // agree on basic negotiation flags (only fixed newstyle is supported so
     // this returns a unit)
-    fn initial_handshake<IO: Read + Write>(mut stream: IO) -> io::Result<()> {
+    fn initial_handshake<IO: Read + Write>(mut stream: IO) -> Result<()> {
         stream.write_u64::<BE>(MAGIC)?;
         stream.write_u64::<BE>(IHAVEOPT)?;
         stream.write_u16::<BE>(HandshakeFlags::FIXED_NEWSTYLE.bits)?;
         let client_flags = stream.read_u32::<BE>()?;
-        let client_flags = match ClientHandshakeFlags::from_bits(client_flags) {
-            Some(flags) => flags,
-            None => return other_error(format!("unexpected client flags {}", client_flags)),
-        };
+        let client_flags = ClientHandshakeFlags::from_bits(client_flags)
+            .ok_or_else(|| ProtocolError(format!("unexpected client flags {}", client_flags)))?;
         if client_flags != ClientHandshakeFlags::C_FIXED_NEWSTYLE {
-            return other_error(format!("client has unsupported flags {:?}", client_flags));
+            bail!(ProtocolError(format!(
+                "client has unsupported flags {:?}",
+                client_flags
+            )));
         }
         Ok(())
     }
