@@ -33,11 +33,18 @@ pub struct Export {
 
 impl Export {
     fn read(&self, off: u64, len: u32, buf: &mut [u8]) -> core::result::Result<(), ErrorType> {
-        if buf.len() < len as usize {
+        let len = len as usize;
+        if buf.len() < len {
             return Err(ErrorType::EOVERFLOW);
         }
-        match self.file.read_at(buf, off) {
-            Ok(_) => Ok(()),
+        match self.file.read_at(&mut buf[..len], off) {
+            Ok(n) => {
+                if n < len {
+                    warn!(target: "nbd", "short read {n} < {len}");
+                    return Err(ErrorType::EIO);
+                }
+                Ok(())
+            }
             Err(err) => Err(ErrorType::from_io_kind(err.kind())),
         }
     }
@@ -225,20 +232,24 @@ impl Server {
     }
 
     fn handle_ops<IO: Read + Write>(export: &Export, mut stream: IO) -> Result<()> {
-        let mut req_buf = vec![0u8; 4096 * 32];
+        let mut buf = vec![0u8; 4096 * 32];
         loop {
-            let req = Request::get(&mut stream, &mut req_buf)?;
+            assert_eq!(buf.len(), 4096 * 32);
+            let req = Request::get(&mut stream, &mut buf)?;
             info!(target: "nbd", "{:?}", req);
             match req.typ {
-                Cmd::READ => match export.read(req.offset, req.len, &mut req_buf) {
-                    Ok(_) => SimpleReply::data(&req, &req_buf).put(&mut stream)?,
+                Cmd::READ => match export.read(req.offset, req.len, &mut buf) {
+                    Ok(_) => {
+                        let data = &buf[..req.len as usize];
+                        SimpleReply::data(&req, data).put(&mut stream)?
+                    }
                     Err(err) => {
                         warn!(target: "nbd", "read error {:?}", err);
                         SimpleReply::err(err, &req).put(&mut stream)?;
                     }
                 },
                 Cmd::WRITE => {
-                    let data = &req_buf[..req.data_len];
+                    let data = &buf[..req.data_len];
                     if req.len as usize > data.len() {
                         SimpleReply::err(ErrorType::EOVERFLOW, &req).put(&mut stream)?;
                         return Ok(());
@@ -291,7 +302,7 @@ impl Server {
             // TODO: how to process clients in parallel? self has to be shared among threads
             match self.client(stream) {
                 Ok(_) => info!(target: "nbd", "client disconnected"),
-                Err(err) => eprintln!("error handling client:\n{}", err),
+                Err(err) => eprintln!("error handling client:\n{:?}", err),
             }
         }
         Ok(())
