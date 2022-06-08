@@ -2,7 +2,7 @@ use clap::Parser;
 use color_eyre::Result;
 use std::fs::OpenOptions;
 
-use nbd::{Export, Server};
+use nbd::server::{Export, Server};
 
 #[derive(Parser, Debug)]
 #[clap(version, about, long_about = None)]

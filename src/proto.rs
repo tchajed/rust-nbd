@@ -16,18 +16,18 @@ use bitflags::bitflags;
 use byteorder::{ReadBytesExt, WriteBytesExt, BE};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
-pub(super) const TCP_PORT: u16 = 10809;
+pub(crate) const TCP_PORT: u16 = 10809;
 
-pub(super) const MAGIC: u64 = 0x4e42444d41474943; // b"NBDMAGIC"
-pub(super) const IHAVEOPT: u64 = 0x49484156454F5054; // b"IHAVEOPT"
-pub(super) const REPLY_MAGIC: u64 = 0x3e889045565a9;
+pub(crate) const MAGIC: u64 = 0x4e42444d41474943; // b"NBDMAGIC"
+pub(crate) const IHAVEOPT: u64 = 0x49484156454F5054; // b"IHAVEOPT"
+pub(crate) const REPLY_MAGIC: u64 = 0x3e889045565a9;
 
 // transmission constants
-pub(super) const REQUEST_MAGIC: u32 = 0x25609513;
-pub(super) const SIMPLE_REPLY_MAGIC: u32 = 0x67446698;
+pub(crate) const REQUEST_MAGIC: u32 = 0x25609513;
+pub(crate) const SIMPLE_REPLY_MAGIC: u32 = 0x67446698;
 
 #[derive(Debug, Clone)]
-pub(super) struct ProtocolError(String);
+pub(crate) struct ProtocolError(String);
 
 impl ProtocolError {
     pub fn new<S: AsRef<str>>(s: S) -> Self {
@@ -45,17 +45,17 @@ impl fmt::Display for ProtocolError {
 impl Error for ProtocolError {}
 
 bitflags! {
-  pub(super) struct HandshakeFlags: u16 {
+  pub(crate) struct HandshakeFlags: u16 {
     const FIXED_NEWSTYLE = 0b01;
     const NO_ZEROES = 0b10;
   }
 
-  pub(super) struct ClientHandshakeFlags: u32 {
+  pub(crate) struct ClientHandshakeFlags: u32 {
     const C_FIXED_NEWSTYLE = 0b01;
     const C_NO_ZEROES = 0b10;
   }
 
-  pub(super) struct TransmitFlags: u16 {
+  pub(crate) struct TransmitFlags: u16 {
     const HAS_FLAGS = 1 << 0;
     const READ_ONLY = 1 << 1;
     const SEND_FLUSH = 1 << 2;
@@ -73,7 +73,7 @@ bitflags! {
 
 #[derive(IntoPrimitive, TryFromPrimitive, Debug, Copy, Clone)]
 #[repr(u32)]
-pub(super) enum OptType {
+pub(crate) enum OptType {
     EXPORT_NAME = 1,
     ABORT = 2,
     LIST = 3,
@@ -85,7 +85,7 @@ pub(super) enum OptType {
 
 #[derive(IntoPrimitive, TryFromPrimitive, Debug, Copy, Clone)]
 #[repr(u16)]
-pub(super) enum InfoType {
+pub(crate) enum InfoType {
     EXPORT = 0,
     NAME = 1,
     DESCRIPTION = 2,
@@ -94,7 +94,7 @@ pub(super) enum InfoType {
 
 #[derive(IntoPrimitive, TryFromPrimitive, Debug, Copy, Clone)]
 #[repr(u32)]
-pub(super) enum ReplyType {
+pub(crate) enum ReplyType {
     ACK = 1,
     SERVER = 2,
     INFO = 3,
@@ -110,7 +110,7 @@ pub(super) enum ReplyType {
 
 /// Builder for replying to an option
 #[must_use]
-pub(super) struct OptReply {
+pub(crate) struct OptReply {
     opt: OptType,
     reply_type: ReplyType,
     data: Vec<u8>,
@@ -152,7 +152,7 @@ impl OptReply {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct Opt {
+pub(crate) struct Opt {
     pub typ: OptType,
     pub data: Vec<u8>,
 }
@@ -185,7 +185,7 @@ impl Opt {
 
 /// Builder for reply to a OptType::LIST option request
 #[must_use]
-pub(super) struct ExportList {
+pub(crate) struct ExportList {
     export_names: Vec<String>,
 }
 
@@ -211,7 +211,7 @@ impl ExportList {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct InfoRequest {
+pub(crate) struct InfoRequest {
     // we just ignore the requested export names in general
     #[allow(dead_code)]
     pub name: String,
@@ -243,7 +243,7 @@ impl InfoRequest {
 
 #[derive(IntoPrimitive, TryFromPrimitive, Debug, PartialEq, Eq)]
 #[repr(u16)]
-pub(super) enum Cmd {
+pub(crate) enum Cmd {
     READ = 0,
     WRITE = 1,
     // NBD_CMD_DISC
@@ -257,7 +257,7 @@ pub(super) enum Cmd {
 }
 
 bitflags! {
-    pub(super) struct CmdFlags: u16 {
+    pub(crate) struct CmdFlags: u16 {
         const FUA = 1 << 0;
         const NO_HOLE = 1 << 1;
         // "don't fragment"
@@ -267,7 +267,7 @@ bitflags! {
     }
 }
 
-pub(super) struct Request {
+pub(crate) struct Request {
     // parsed in case we need them later
     #[allow(dead_code)]
     flags: CmdFlags,
@@ -350,7 +350,7 @@ impl Request {
 
 #[derive(IntoPrimitive, TryFromPrimitive, Debug)]
 #[repr(u32)]
-pub(super) enum ErrorType {
+pub(crate) enum ErrorType {
     OK = 0,
     EPERM = 1,
     EIO = 5,
@@ -378,7 +378,7 @@ impl ErrorType {
 
 #[derive(Debug)]
 #[must_use]
-pub(super) struct SimpleReply<'a> {
+pub(crate) struct SimpleReply<'a> {
     err: ErrorType,
     handle: u64,
     data: &'a [u8],
