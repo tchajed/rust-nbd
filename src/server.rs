@@ -83,6 +83,12 @@ pub struct Server {
 }
 
 impl Server {
+    // fake constant for the server's supported operations
+    #[allow(non_snake_case)]
+    fn TRANSMIT_FLAGS() -> TransmitFlags {
+        TransmitFlags::HAS_FLAGS | TransmitFlags::SEND_FLUSH
+    }
+
     /// Create a Server for export
     pub fn new(export: Export) -> Self {
         Self { export }
@@ -96,9 +102,8 @@ impl Server {
         stream
             .write_u16::<BE>((HandshakeFlags::FIXED_NEWSTYLE | HandshakeFlags::NO_ZEROES).bits())?;
         let client_flags = stream.read_u32::<BE>()?;
-        let client_flags = ClientHandshakeFlags::from_bits(client_flags).ok_or_else(|| {
-            ProtocolError::new(format!("unexpected client flags {}", client_flags))
-        })?;
+        let client_flags = ClientHandshakeFlags::from_bits(client_flags)
+            .ok_or_else(|| ProtocolError::new(format!("unexpected client flags {client_flags}")))?;
         if !client_flags.contains(ClientHandshakeFlags::C_FIXED_NEWSTYLE) {
             bail!(ProtocolError::new("client does not support FIXED_NEWSTYLE"));
         }
@@ -124,7 +129,7 @@ impl Server {
         // S: 16 bits, transmission flags
         // S: 124 bytes, zeroes (reserved) (unless `NBD_FLAG_C_NO_ZEROES` was negotiated by the client)
         stream.write_u64::<BE>(self.export.size()?)?;
-        let transmit = TransmitFlags::HAS_FLAGS | TransmitFlags::SEND_FLUSH;
+        let transmit = Self::TRANSMIT_FLAGS();
         stream.write_u16::<BE>(transmit.bits())?;
         if !flags.contains(HandshakeFlags::NO_ZEROES) {
             stream.write_all(&[0u8; 124])?;
@@ -156,6 +161,7 @@ impl Server {
                     let mut buf = vec![];
                     buf.write_u16::<BE>(InfoType::EXPORT.into())?;
                     buf.write_u64::<BE>(self.export.size()? as u64)?;
+                    buf.write_u16::<BE>(Self::TRANSMIT_FLAGS().bits())?;
                     OptReply::new(opt_typ, ReplyType::INFO, buf).put(stream)?;
                 }
                 InfoType::BLOCK_SIZE => {
