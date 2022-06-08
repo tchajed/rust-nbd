@@ -268,7 +268,7 @@ impl Server {
                     SimpleReply::ok(&req).put(&mut stream)?;
                 }
                 _ => {
-                    SimpleReply::ok(&req).put(&mut stream)?;
+                    SimpleReply::err(ErrorType::ENOTSUP, &req).put(&mut stream)?;
                     return Ok(());
                 }
             }
