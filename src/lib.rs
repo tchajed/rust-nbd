@@ -169,10 +169,11 @@ impl fmt::Debug for Request {
         if !self.flags.is_empty() {
             f = f.field("flags", &self.flags);
         }
-        f = f
-            .field("typ", &self.typ)
-            // .field("handle", &self.handle)
-            .field("offset", &self.offset);
+        f = f.field("typ", &self.typ);
+        // .field("handle", &self.handle);
+        if !(self.typ == Cmd::READ || self.typ == Cmd::WRITE) {
+            f = f.field("offset", &self.offset);
+        }
         if !self.data.is_empty() {
             f = f.field("data.len", &self.data.len());
         }
