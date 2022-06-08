@@ -32,27 +32,38 @@ pub struct Export {
 }
 
 impl Export {
-    fn read(&self, off: u64, len: u32, buf: &mut [u8]) -> core::result::Result<(), ErrorType> {
+    fn read<'a, 'b>(
+        &'a self,
+        off: u64,
+        len: u32,
+        buf: &'b mut [u8],
+    ) -> core::result::Result<&'b mut [u8], ErrorType> {
         let len = len as usize;
         if buf.len() < len {
             return Err(ErrorType::EOVERFLOW);
         }
-        match self.file.read_at(&mut buf[..len], off) {
+        let buf = &mut buf[..len];
+        match self.file.read_at(buf, off) {
             Ok(n) => {
                 if n < len {
                     warn!(target: "nbd", "short read {n} < {len}");
                     return Err(ErrorType::EIO);
                 }
-                Ok(())
+                Ok(buf)
             }
             Err(err) => Err(ErrorType::from_io_kind(err.kind())),
         }
     }
 
-    fn write(&self, off: u64, data: &[u8]) -> core::result::Result<(), ErrorType> {
+    fn write(&self, off: u64, len: usize, data: &[u8]) -> core::result::Result<(), ErrorType> {
+        if len > data.len() {
+            return Err(ErrorType::EOVERFLOW);
+        }
+        let data = &data[..len];
         self.file
             .write_all_at(data, off)
-            .map_err(|err| ErrorType::from_io_kind(err.kind()))
+            .map_err(|err| ErrorType::from_io_kind(err.kind()))?;
+        Ok(())
     }
 
     fn flush(&self) -> io::Result<()> {
@@ -239,29 +250,19 @@ impl Server {
             info!(target: "nbd", "{:?}", req);
             match req.typ {
                 Cmd::READ => match export.read(req.offset, req.len, &mut buf) {
-                    Ok(_) => {
-                        let data = &buf[..req.len as usize];
-                        SimpleReply::data(&req, data).put(&mut stream)?
-                    }
+                    Ok(data) => SimpleReply::data(&req, data).put(&mut stream)?,
                     Err(err) => {
                         warn!(target: "nbd", "read error {:?}", err);
                         SimpleReply::err(err, &req).put(&mut stream)?;
                     }
                 },
-                Cmd::WRITE => {
-                    let data = &buf[..req.data_len];
-                    if req.len as usize > data.len() {
-                        SimpleReply::err(ErrorType::EOVERFLOW, &req).put(&mut stream)?;
-                        return Ok(());
+                Cmd::WRITE => match export.write(req.offset, req.data_len, &buf) {
+                    Ok(_) => SimpleReply::ok(&req).put(&mut stream)?,
+                    Err(err) => {
+                        warn!(target: "nbd", "write error {:?}", err);
+                        SimpleReply::err(err, &req).put(&mut stream)?;
                     }
-                    match export.write(req.offset, data) {
-                        Ok(_) => SimpleReply::ok(&req).put(&mut stream)?,
-                        Err(err) => {
-                            warn!(target: "nbd", "write error {:?}", err);
-                            SimpleReply::err(err, &req).put(&mut stream)?;
-                        }
-                    }
-                }
+                },
                 Cmd::DISCONNECT => return Ok(()),
                 Cmd::FLUSH => {
                     export.flush()?;

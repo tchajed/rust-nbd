@@ -328,14 +328,14 @@ impl Request {
         let handle = stream.read_u64::<BE>()?;
         let offset = stream.read_u64::<BE>()?;
         let len = stream.read_u32::<BE>()?;
-        let read_len;
+        let data_len;
         if typ == Cmd::WRITE {
-            read_len = (len as usize).min(buf.len());
+            data_len = (len as usize).min(buf.len());
             stream
-                .read_exact(&mut buf[..read_len])
-                .wrap_err_with(|| format!("parsing write request of length {len}"))?;
+                .read_exact(&mut buf[..data_len])
+                .wrap_err_with(|| format!("parsing write request of length {data_len}"))?;
         } else {
-            read_len = 0;
+            data_len = 0;
         };
         Ok(Self {
             flags,
@@ -343,7 +343,7 @@ impl Request {
             handle,
             offset,
             len,
-            data_len: read_len,
+            data_len,
         })
     }
 }
