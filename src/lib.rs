@@ -91,7 +91,7 @@ impl Server {
 
     // agree on basic negotiation flags (only fixed newstyle is supported so
     // this returns a unit)
-    fn initial_handshake<IO: Read + Write>(mut stream: IO) -> Result<HandshakeFlags> {
+    fn initial_handshake<IO: Read + Write>(stream: &mut IO) -> Result<HandshakeFlags> {
         stream.write_u64::<BE>(MAGIC)?;
         stream.write_u64::<BE>(IHAVEOPT)?;
         stream
@@ -110,13 +110,13 @@ impl Server {
         Ok(flags)
     }
 
-    fn send_export_list<IO: Write>(&self, mut stream: IO) -> Result<()> {
-        ExportList::new(vec![self.export.name.clone()]).put(&mut stream)?;
+    fn send_export_list<IO: Write>(&self, stream: &mut IO) -> Result<()> {
+        ExportList::new(vec![self.export.name.clone()]).put(stream)?;
         Ok(())
     }
 
     /// send export info at the end of newstyle negotiation, when client sends NBD_OPT_EXPORT_NAME
-    fn send_export_info<IO: Write>(&self, mut stream: IO, flags: HandshakeFlags) -> Result<()> {
+    fn send_export_info<IO: Write>(&self, stream: &mut IO, flags: HandshakeFlags) -> Result<()> {
         // If the value of the option field is `NBD_OPT_EXPORT_NAME` and the
         // server is willing to allow the export, the server replies with
         // information about the used export:
@@ -138,7 +138,7 @@ impl Server {
         &self,
         opt_typ: OptType,
         info_req: InfoRequest,
-        mut stream: IO,
+        stream: &mut IO,
     ) -> Result<()> {
         for typ in info_req.typs.iter().chain([InfoType::EXPORT].iter()) {
             match typ {
@@ -157,7 +157,7 @@ impl Server {
                     let mut buf = vec![];
                     buf.write_u16::<BE>(InfoType::EXPORT.into())?;
                     buf.write_u64::<BE>(self.export.size()? as u64)?;
-                    OptReply::new(opt_typ, ReplyType::INFO, buf).put(&mut stream)?;
+                    OptReply::new(opt_typ, ReplyType::INFO, buf).put(stream)?;
                 }
                 InfoType::BLOCK_SIZE => {
                     // Represents the server's advertised block size
@@ -186,15 +186,15 @@ impl Server {
                     buf.write_u32::<BE>(1)?; // minimum
                     buf.write_u32::<BE>(4096)?; // preferred
                     buf.write_u32::<BE>(4096 * 32)?; // maximum
-                    OptReply::new(opt_typ, ReplyType::INFO, buf).put(&mut stream)?;
+                    OptReply::new(opt_typ, ReplyType::INFO, buf).put(stream)?;
                 }
                 InfoType::NAME | InfoType::DESCRIPTION => {
-                    OptReply::new(opt_typ, ReplyType::ERR_UNSUP, vec![]).put(&mut stream)?;
+                    OptReply::new(opt_typ, ReplyType::ERR_UNSUP, vec![]).put(stream)?;
                     return Ok(());
                 }
             }
         }
-        OptReply::ack(opt_typ).put(&mut stream)?;
+        OptReply::ack(opt_typ).put(stream)?;
         Ok(())
     }
 
@@ -203,32 +203,32 @@ impl Server {
     /// If this returns Ok(None), then the client wants to disconnect
     fn handshake_haggle<IO: Read + Write>(
         &self,
-        mut stream: IO,
+        stream: &mut IO,
         flags: HandshakeFlags,
     ) -> Result<Option<&Export>> {
         loop {
-            let opt = Opt::get(&mut stream)?;
+            let opt = Opt::get(stream)?;
             match opt.typ {
                 OptType::EXPORT_NAME => {
                     let _export: String = String::from_utf8(opt.data)
                         .wrap_err(ProtocolError::new("non-UTF8 export name"))?;
                     // requested export name is currently ignored since there is
                     // only a single export
-                    self.send_export_info(&mut stream, flags)?;
+                    self.send_export_info(stream, flags)?;
                     return Ok(Some(&self.export));
                 }
                 OptType::LIST => {
-                    self.send_export_list(&mut stream)?;
+                    self.send_export_list(stream)?;
                 }
                 // the only difference between INFO and GO is that on success,
                 // GO starts the transmission phase
                 OptType::INFO => {
-                    let info_req = InfoRequest::get(&opt.data[..])?;
-                    self.info_responses(opt.typ, info_req, &mut stream)?;
+                    let info_req = InfoRequest::get(&mut &opt.data[..])?;
+                    self.info_responses(opt.typ, info_req, stream)?;
                 }
                 OptType::GO => {
-                    let info_req = InfoRequest::get(&opt.data[..])?;
-                    self.info_responses(opt.typ, info_req, &mut stream)?;
+                    let info_req = InfoRequest::get(&mut &opt.data[..])?;
+                    self.info_responses(opt.typ, info_req, stream)?;
                     return Ok(Some(&self.export));
                 }
                 OptType::ABORT => {
@@ -236,58 +236,58 @@ impl Server {
                 }
                 _ => {
                     warn!("got unsupported option {:?}", opt);
-                    OptReply::new(opt.typ, ReplyType::ERR_UNSUP, vec![]).put(&mut stream)?;
+                    OptReply::new(opt.typ, ReplyType::ERR_UNSUP, vec![]).put(stream)?;
                 }
             }
         }
     }
 
-    fn handle_ops<IO: Read + Write>(export: &Export, mut stream: IO) -> Result<()> {
+    fn handle_ops<IO: Read + Write>(export: &Export, stream: &mut IO) -> Result<()> {
         let mut buf = vec![0u8; 4096 * 64];
         loop {
             assert_eq!(buf.len(), 4096 * 64);
-            let req = Request::get(&mut stream, &mut buf)?;
+            let req = Request::get(stream, &mut buf)?;
             info!(target: "nbd", "{:?}", req);
             match req.typ {
                 Cmd::READ => match export.read(req.offset, req.len, &mut buf) {
-                    Ok(data) => SimpleReply::data(&req, data).put(&mut stream)?,
+                    Ok(data) => SimpleReply::data(&req, data).put(stream)?,
                     Err(err) => {
                         warn!(target: "nbd", "read error {:?}", err);
-                        SimpleReply::err(err, &req).put(&mut stream)?;
+                        SimpleReply::err(err, &req).put(stream)?;
                     }
                 },
                 Cmd::WRITE => match export.write(req.offset, req.data_len, &buf) {
-                    Ok(_) => SimpleReply::ok(&req).put(&mut stream)?,
+                    Ok(_) => SimpleReply::ok(&req).put(stream)?,
                     Err(err) => {
                         warn!(target: "nbd", "write error {:?}", err);
-                        SimpleReply::err(err, &req).put(&mut stream)?;
+                        SimpleReply::err(err, &req).put(stream)?;
                     }
                 },
                 Cmd::DISCONNECT => return Ok(()),
                 Cmd::FLUSH => {
                     export.flush()?;
-                    SimpleReply::ok(&req).put(&mut stream)?;
+                    SimpleReply::ok(&req).put(stream)?;
                 }
                 Cmd::TRIM => {
-                    SimpleReply::ok(&req).put(&mut stream)?;
+                    SimpleReply::ok(&req).put(stream)?;
                 }
                 _ => {
-                    SimpleReply::err(ErrorType::ENOTSUP, &req).put(&mut stream)?;
+                    SimpleReply::err(ErrorType::ENOTSUP, &req).put(stream)?;
                     return Ok(());
                 }
             }
         }
     }
 
-    fn handle_client<IO: Read + Write>(&self, mut stream: IO) -> Result<()> {
-        let flags = Self::initial_handshake(&mut stream).wrap_err("initial handshake failed")?;
+    fn handle_client<IO: Read + Write>(&self, stream: &mut IO) -> Result<()> {
+        let flags = Self::initial_handshake(stream).wrap_err("initial handshake failed")?;
         info!("handshake with {:?}", flags);
         if let Some(export) = self
-            .handshake_haggle(&mut stream, flags)
+            .handshake_haggle(stream, flags)
             .wrap_err("handshake haggling failed")?
         {
             info!("handshake finished");
-            Server::handle_ops(export, &mut stream).wrap_err("handling client operations")?;
+            Server::handle_ops(export, stream).wrap_err("handling client operations")?;
         }
         Ok(())
     }
@@ -300,11 +300,11 @@ impl Server {
         let addr = ("127.0.0.1", TCP_PORT);
         let listener = TcpListener::bind(addr)?;
         for stream in listener.incoming() {
-            let stream = stream?;
+            let mut stream = stream?;
             stream.set_nodelay(true)?;
             info!(target: "nbd", "client connected");
             // TODO: how to process clients in parallel? self has to be shared among threads
-            match self.handle_client(stream) {
+            match self.handle_client(&mut stream) {
                 Ok(_) => info!(target: "nbd", "client disconnected"),
                 Err(err) => eprintln!("error handling client:\n{:?}", err),
             }

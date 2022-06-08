@@ -133,7 +133,7 @@ impl OptReply {
         }
     }
 
-    pub fn put<IO: Write>(self, mut stream: IO) -> io::Result<()> {
+    pub fn put<IO: Write>(self, stream: &mut IO) -> io::Result<()> {
         //     The server will reply to any option apart from NBD_OPT_EXPORT_NAME with reply packets in the following format:
         //
         // S: 64 bits, 0x3e889045565a9 (magic number for replies)
@@ -158,7 +158,7 @@ pub(super) struct Opt {
 }
 
 impl Opt {
-    pub fn get<IO: Read>(mut stream: IO) -> Result<Self> {
+    pub fn get<IO: Read>(stream: &mut IO) -> Result<Self> {
         // C: 64 bits, 0x49484156454F5054 (ASCII 'IHAVEOPT') (note same newstyle handshake's magic number)
         // C: 32 bits, option
         // C: 32 bits, length of option data (unsigned)
@@ -193,7 +193,7 @@ impl ExportList {
     pub fn new(export_names: Vec<String>) -> Self {
         Self { export_names }
     }
-    pub fn put<IO: Write>(self, mut stream: IO) -> Result<()> {
+    pub fn put<IO: Write>(self, stream: &mut IO) -> Result<()> {
         // Return zero or more NBD_REP_SERVER replies, one for each export,
         // followed by NBD_REP_ACK or an error (such as NBD_REP_ERR_SHUTDOWN).
         // The server MAY omit entries from this list if TLS has not been
@@ -203,8 +203,8 @@ impl ExportList {
             let mut data = vec![];
             data.write_u32::<BE>(name.len() as u32)?;
             data.write_all(name.as_bytes())?;
-            OptReply::new(OptType::LIST, ReplyType::SERVER, data).put(&mut stream)?;
-            OptReply::ack(OptType::LIST).put(&mut stream)?;
+            OptReply::new(OptType::LIST, ReplyType::SERVER, data).put(stream)?;
+            OptReply::ack(OptType::LIST).put(stream)?;
         }
         Ok(())
     }
@@ -219,7 +219,7 @@ pub(super) struct InfoRequest {
 }
 
 impl InfoRequest {
-    pub fn get<IO: Read>(mut stream: IO) -> Result<Self> {
+    pub fn get<IO: Read>(stream: &mut IO) -> Result<Self> {
         let name_len = stream.read_u32::<BE>()?;
         let mut buf = vec![0; name_len as usize];
         stream.read_exact(&mut buf)?;
@@ -304,7 +304,7 @@ impl fmt::Debug for Request {
 
 impl Request {
     /// get reads the request using data as a local buffer if this is a write request
-    pub fn get<IO: Read>(mut stream: IO, buf: &mut [u8]) -> Result<Self> {
+    pub fn get<IO: Read>(stream: &mut IO, buf: &mut [u8]) -> Result<Self> {
         // C: 32 bits, 0x25609513, magic (NBD_REQUEST_MAGIC)
         // C: 16 bits, command flags
         // C: 16 bits, type
@@ -405,7 +405,7 @@ impl<'a> SimpleReply<'a> {
         }
     }
 
-    pub fn put<IO: Write>(self, mut stream: IO) -> Result<()> {
+    pub fn put<IO: Write>(self, stream: &mut IO) -> Result<()> {
         stream.write_u32::<BE>(SIMPLE_REPLY_MAGIC)?;
         stream.write_u32::<BE>(self.err.into())?;
         stream.write_u64::<BE>(self.handle)?;
