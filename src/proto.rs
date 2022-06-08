@@ -220,8 +220,10 @@ pub(super) struct Request {
     pub typ: Cmd,
     pub handle: u64,
     pub offset: u64,
-    pub len: u32, // used for READ (redundant for WRITE)
-    pub data: Vec<u8>,
+    // used for READ (redundant for WRITE)
+    pub len: u32,
+    // actual data is stored into caller-provided buffer
+    pub data_len: usize,
 }
 
 impl fmt::Debug for Request {
@@ -235,17 +237,16 @@ impl fmt::Debug for Request {
         if self.typ == Cmd::READ || self.typ == Cmd::WRITE {
             f = f.field("offset", &self.offset);
         }
-        if !self.data.is_empty() {
-            f = f.field("data.len", &self.data.len());
+        if self.len != 0 {
+            f = f.field("len", &self.len);
         }
         f.finish_non_exhaustive()
     }
 }
 
 impl Request {
-    const MAX_WRITE_SIZE: u32 = 100_000_000;
-
-    pub fn get<IO: Read>(mut stream: IO) -> Result<Self> {
+    /// get reads the request using data as a local buffer if this is a write request
+    pub fn get<IO: Read>(mut stream: IO, buf: &mut [u8]) -> Result<Self> {
         // C: 32 bits, 0x25609513, magic (NBD_REQUEST_MAGIC)
         // C: 16 bits, command flags
         // C: 16 bits, type
@@ -269,17 +270,14 @@ impl Request {
         let handle = stream.read_u64::<BE>()?;
         let offset = stream.read_u64::<BE>()?;
         let len = stream.read_u32::<BE>()?;
-        let data = {
-            if typ == Cmd::WRITE {
-                let read_len = len.min(Self::MAX_WRITE_SIZE);
-                let mut buf = vec![0; read_len as usize];
-                stream
-                    .read_exact(&mut buf)
-                    .wrap_err_with(|| format!("parsing write request of length {len}"))?;
-                buf
-            } else {
-                vec![]
-            }
+        let read_len;
+        if typ == Cmd::WRITE {
+            read_len = (len as usize).min(buf.len());
+            stream
+                .read_exact(&mut buf[..read_len])
+                .wrap_err_with(|| format!("parsing write request of length {len}"))?;
+        } else {
+            read_len = 0;
         };
         Ok(Self {
             flags,
@@ -287,7 +285,7 @@ impl Request {
             handle,
             offset,
             len,
-            data,
+            data_len: read_len,
         })
     }
 }
@@ -321,15 +319,14 @@ impl ErrorType {
 }
 
 #[derive(Debug)]
-pub(super) struct SimpleReply {
+pub(super) struct SimpleReply<'a> {
     err: ErrorType,
     handle: u64,
-    // TODO: use reference
-    data: Vec<u8>,
+    data: &'a [u8],
 }
 
-impl SimpleReply {
-    pub fn data(req: &Request, data: Vec<u8>) -> Self {
+impl<'a> SimpleReply<'a> {
+    pub fn data(req: &Request, data: &'a [u8]) -> Self {
         SimpleReply {
             err: ErrorType::OK,
             handle: req.handle,
@@ -338,14 +335,14 @@ impl SimpleReply {
     }
 
     pub fn ok(req: &Request) -> Self {
-        Self::data(req, vec![])
+        Self::data(req, &[])
     }
 
     pub fn err(err: ErrorType, req: &Request) -> Self {
         SimpleReply {
             err,
             handle: req.handle,
-            data: vec![],
+            data: &[],
         }
     }
 

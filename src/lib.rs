@@ -32,10 +32,12 @@ pub struct Export {
 }
 
 impl Export {
-    fn read(&self, off: u64, len: u32) -> core::result::Result<Vec<u8>, ErrorType> {
-        let mut buf = vec![0; len as usize];
-        match self.file.read_at(&mut buf, off) {
-            Ok(_) => Ok(buf),
+    fn read(&self, off: u64, len: u32, buf: &mut [u8]) -> core::result::Result<(), ErrorType> {
+        if buf.len() < len as usize {
+            return Err(ErrorType::EOVERFLOW);
+        }
+        match self.file.read_at(buf, off) {
+            Ok(_) => Ok(()),
             Err(err) => Err(ErrorType::from_io_kind(err.kind())),
         }
     }
@@ -158,20 +160,22 @@ impl Server {
     }
 
     fn handle_ops<IO: Read + Write>(export: &Export, mut stream: IO) -> Result<()> {
+        let mut req_buf = vec![0u8; 4096 * 32];
         loop {
-            let req = Request::get(&mut stream)?;
+            let req = Request::get(&mut stream, &mut req_buf)?;
             info!(target: "nbd", "{:?}", req);
             match req.typ {
-                Cmd::READ => match export.read(req.offset, req.len) {
-                    Ok(data) => SimpleReply::data(&req, data).put(&mut stream)?,
+                Cmd::READ => match export.read(req.offset, req.len, &mut req_buf) {
+                    Ok(_) => SimpleReply::data(&req, &req_buf).put(&mut stream)?,
                     Err(err) => SimpleReply::err(err, &req).put(&mut stream)?,
                 },
                 Cmd::WRITE => {
-                    if req.len as usize > req.data.len() {
+                    let data = &req_buf[..req.data_len];
+                    if req.len as usize > data.len() {
                         SimpleReply::err(ErrorType::EOVERFLOW, &req).put(&mut stream)?;
                         return Ok(());
                     }
-                    match export.write(req.offset, &req.data) {
+                    match export.write(req.offset, data) {
                         Ok(_) => SimpleReply::ok(&req).put(&mut stream)?,
                         Err(err) => SimpleReply::err(err, &req).put(&mut stream)?,
                     }
