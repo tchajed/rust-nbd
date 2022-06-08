@@ -232,9 +232,9 @@ impl Server {
     }
 
     fn handle_ops<IO: Read + Write>(export: &Export, mut stream: IO) -> Result<()> {
-        let mut buf = vec![0u8; 4096 * 32];
+        let mut buf = vec![0u8; 4096 * 64];
         loop {
-            assert_eq!(buf.len(), 4096 * 32);
+            assert_eq!(buf.len(), 4096 * 64);
             let req = Request::get(&mut stream, &mut buf)?;
             info!(target: "nbd", "{:?}", req);
             match req.typ {
@@ -265,6 +265,9 @@ impl Server {
                 Cmd::DISCONNECT => return Ok(()),
                 Cmd::FLUSH => {
                     export.flush()?;
+                    SimpleReply::ok(&req).put(&mut stream)?;
+                }
+                Cmd::TRIM => {
                     SimpleReply::ok(&req).put(&mut stream)?;
                 }
                 _ => {

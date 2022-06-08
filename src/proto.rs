@@ -288,7 +288,11 @@ impl fmt::Debug for Request {
         }
         f = f.field("typ", &self.typ);
         // .field("handle", &self.handle);
-        if self.typ == Cmd::READ || self.typ == Cmd::WRITE {
+        if self.typ == Cmd::READ
+            || self.typ == Cmd::WRITE
+            || self.typ == Cmd::TRIM
+            || self.typ == Cmd::CACHE
+        {
             f = f.field("offset", &self.offset);
         }
         if self.len != 0 {
