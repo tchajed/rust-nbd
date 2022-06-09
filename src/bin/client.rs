@@ -14,10 +14,13 @@ struct Args {
     #[clap(short, long, default_value = "localhost")]
     host: String,
 
-    #[clap(short, long)]
+    #[clap(short, long, help = "disconnect from an existing client")]
     disconnect: bool,
 
-    #[clap(default_value = "/dev/nbd0")]
+    #[clap(short, long, help = "keep running in the foreground (don't daemonize)")]
+    foreground: bool,
+
+    #[clap(default_value = "/dev/nbd0", help = "nbd device to set up")]
     device: String,
 }
 
@@ -64,10 +67,12 @@ fn main() -> Result<()> {
     let sock = client.into_raw_fd();
     kernel::set_sock(&nbd, sock).wrap_err("could not set nbd sock")?;
 
-    if let Ok(Fork::Child) = daemon(false, false) {
-        kernel::do_it(&nbd)
-            .wrap_err("error waiting for nbd")
-            .unwrap();
+    if !args.foreground {
+        if let Ok(Fork::Child) = daemon(false, false) {
+            kernel::do_it(&nbd)
+                .wrap_err("error waiting for nbd")
+                .unwrap();
+        }
     }
 
     Ok(())
