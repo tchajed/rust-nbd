@@ -4,16 +4,18 @@
 
 Implementation of a basic Network Block Device (NBD) server in Rust. NBD exports
 a block device over the network, with commands for reading and writing blocks of
-the device by offset. The kernel natively supports NBD, but you'll probably need
-to install the userspace utilities to use it.
+the device by offset. The kernel natively supports NBD, but you do need `sudo
+modprobe nbd` to initialize the module. This library provides a Rust
+implementation of the necessary userspace libraries, so you don't need to
+install `nbd-client`.
 
 ```
 $ cargo run --release -- --size 1000 disk.img &
 $ sudo modprobe nbd
-$ sudo nbd-client localhost -N default /dev/nbd0
+$ cargo run --release --bin client -- /dev/nbd0
 ```
 
-Now we can interact with /dev/nbd0 as with any other block device, for example
+Now we can interact with `/dev/nbd0` as with any other block device, for example
 creating an ext4 file system backed by the remote server:
 
 ```
@@ -26,5 +28,5 @@ $ sudo mount /dev/nbd0 /mnt/nbd
 Finally, make sure to disconnect before running again:
 
 ```
-$ sudo nbd-client -d /dev/nbd0
+$ cargo run --release --bin client -- --disconnect /dev/nbd0
 ```

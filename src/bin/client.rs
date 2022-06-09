@@ -49,7 +49,13 @@ fn main() -> Result<()> {
     let client = Client::connect(&args.host).wrap_err("connecting to nbd server")?;
     let size = client.size();
 
-    let nbd = open_nbd(&args)?;
+    let nbd = match open_nbd(&args) {
+        Ok(nbd) => nbd,
+        Err(err) => {
+            eprintln!("could not open nbd device - do you need to run sudo modprobe nbd?");
+            return Err(err);
+        }
+    };
     kernel::set_blksize(&nbd, 4096)?;
     kernel::set_size_blocks(&nbd, size / 4096)?;
     kernel::set_flags(&nbd)?;
