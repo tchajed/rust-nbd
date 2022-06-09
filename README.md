@@ -8,17 +8,23 @@ the device by offset. The kernel natively supports NBD, but you'll probably need
 to install the userspace utilities to use it.
 
 ```
-$ cargo run --release &
+$ cargo run --release -- --size 1000 disk.img &
 $ sudo modprobe nbd
 $ sudo nbd-client localhost -N default /dev/nbd0
 ```
 
-Now we can interact with /dev/nbd0, for example creating an ext4 file system
-backed by the remote server:
+Now we can interact with /dev/nbd0 as with any other block device, for example
+creating an ext4 file system backed by the remote server:
 
 ```
 $ sudo chown $USER /dev/nbd0
 $ mkfs -t ext4 /dev/nbd0
 $ mkdir /mnt/nbd
 $ sudo mount /dev/nbd0 /mnt/nbd
+```
+
+Finally, make sure to disconnect before running again:
+
+```
+$ sudo nbd-client -d /dev/nbd0
 ```
