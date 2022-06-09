@@ -72,7 +72,7 @@ bitflags! {
   }
 }
 
-#[derive(IntoPrimitive, TryFromPrimitive, Debug, Copy, Clone)]
+#[derive(IntoPrimitive, TryFromPrimitive, Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u32)]
 pub(crate) enum OptType {
     EXPORT_NAME = 1,
@@ -84,7 +84,7 @@ pub(crate) enum OptType {
     GO = 7,
 }
 
-#[derive(IntoPrimitive, TryFromPrimitive, Debug, Copy, Clone)]
+#[derive(IntoPrimitive, TryFromPrimitive, Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u16)]
 pub(crate) enum InfoType {
     EXPORT = 0,
@@ -93,7 +93,7 @@ pub(crate) enum InfoType {
     BLOCK_SIZE = 3,
 }
 
-#[derive(IntoPrimitive, TryFromPrimitive, Debug, Copy, Clone)]
+#[derive(IntoPrimitive, TryFromPrimitive, Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u32)]
 pub(crate) enum ReplyType {
     ACK = 1,
@@ -152,7 +152,7 @@ impl OptReply {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Opt {
     pub typ: OptType,
     pub data: Vec<u8>,
@@ -276,6 +276,7 @@ bitflags! {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Request {
     // parsed in case we need them later
     #[allow(dead_code)]
@@ -328,7 +329,7 @@ impl Request {
     ///
     /// data (required only for a Cmd::WRITE) is not part of a Request and must
     /// be included separately.
-    pub fn put<IO: Write>(&self, data: &[u8], stream: &mut IO) -> Result<()> {
+    pub fn put<IO: Write>(self, data: &[u8], stream: &mut IO) -> Result<()> {
         stream.write_u32::<BE>(REQUEST_MAGIC)?;
         stream.write_u16::<BE>(self.flags.bits())?;
         stream.write_u16::<BE>(self.typ.into())?;
@@ -355,9 +356,6 @@ impl Request {
         let flags = stream.read_u16::<BE>()?;
         let flags = CmdFlags::from_bits(flags)
             .ok_or_else(|| ProtocolError(format!("unexpected command flags {}", flags)))?;
-        if !flags.is_empty() {
-            bail!(ProtocolError(format!("unsupported flags: {:?}", flags)));
-        }
         let typ = stream.read_u16::<BE>()?;
         let typ =
             Cmd::try_from(typ).map_err(|_| ProtocolError(format!("unexpected command {}", typ)))?;
@@ -469,6 +467,58 @@ impl<'a> SimpleReply<'a> {
         stream.write_u32::<BE>(self.err.into())?;
         stream.write_u64::<BE>(self.handle)?;
         stream.write_all(self.data)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_opt_get_put() -> Result<()> {
+        let opt = Opt {
+            typ: OptType::INFO,
+            data: vec![2, 3, 4, 5],
+        };
+        let mut buf = vec![];
+        opt.clone().put(&mut buf)?;
+        assert_eq!(Opt::get(&mut &buf[..])?, opt);
+        Ok(())
+    }
+
+    #[test]
+    fn test_request_get_put_read() -> Result<()> {
+        let req = Request {
+            flags: CmdFlags::empty(),
+            typ: Cmd::READ,
+            handle: 1234,
+            offset: 5123,
+            len: 698123,
+            data_len: 0,
+        };
+        let mut buf = vec![];
+        req.clone().put(&[], &mut buf)?;
+        assert_eq!(Request::get(&mut &buf[..], &mut [])?, req);
+        Ok(())
+    }
+
+    #[test]
+    fn test_request_get_put_write() -> Result<()> {
+        let req = Request {
+            flags: CmdFlags::FUA,
+            typ: Cmd::WRITE,
+            handle: 1234,
+            offset: 5123,
+            len: 12,
+            data_len: 12,
+        };
+        let data = vec![1; 12];
+        let mut buf = vec![];
+        req.clone().put(&data, &mut buf)?;
+        let mut data_read = vec![0; 12];
+        assert_eq!(Request::get(&mut &buf[..], &mut data_read)?, req);
+        assert_eq!(data, data_read);
         Ok(())
     }
 }
