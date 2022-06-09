@@ -192,6 +192,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fork"
+version = "0.1.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57b4f1a740392e495821244cc1658d86496ac6e67a47da67e243ed401b937717"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -296,6 +305,7 @@ dependencies = [
  "clap",
  "color-eyre",
  "env_logger",
+ "fork",
  "log",
  "nix",
  "num_enum",

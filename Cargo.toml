@@ -12,6 +12,7 @@ byteorder = "1.4.3"
 clap = { version = "3.1.18", features = ["derive"] }
 color-eyre = "0.6.1"
 env_logger = "0.9.0"
+fork = "0.1.19"
 log = "0.4.17"
 nix = { version = "0.24.1", default_features = false, features = ["ioctl"] }
 num_enum = "0.5.7"

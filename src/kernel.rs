@@ -11,6 +11,8 @@ use std::{
     os::unix::prelude::{AsRawFd, RawFd},
 };
 
+use crate::proto::TransmitFlags;
+
 mod ioctl {
     use nix::{ioctl_none_bad, ioctl_write_int_bad, request_code_none};
     const NBD_IOCTL: u8 = 0xAB;
@@ -74,5 +76,13 @@ pub fn clear_sock(f: &File) -> io::Result<()> {
 pub fn disconnect(f: &File) -> io::Result<()> {
     let fd = f.as_raw_fd();
     unsafe { ioctl::disconnect(fd)? };
+    Ok(())
+}
+
+/// Set flags for the NBD device `f`, using the client's required flags.
+pub fn set_flags(f: &File) -> io::Result<()> {
+    let fd = f.as_raw_fd();
+    let flags = TransmitFlags::HAS_FLAGS | TransmitFlags::SEND_FLUSH;
+    unsafe { ioctl::set_flags(fd, flags.bits() as i32)? };
     Ok(())
 }
