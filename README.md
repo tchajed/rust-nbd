@@ -2,31 +2,41 @@
 
 [![CI](https://github.com/tchajed/rust-nbd/actions/workflows/build.yml/badge.svg)](https://github.com/tchajed/rust-nbd/actions/workflows/build.yml)
 
-Implementation of a basic Network Block Device (NBD) server in Rust. NBD exports
-a block device over the network, with commands for reading and writing blocks of
-the device by offset. The kernel natively supports NBD, but you do need `sudo
-modprobe nbd` to initialize the module. This library provides a Rust
-implementation of the necessary userspace libraries, so you don't need to
-install `nbd-client`.
+Implementation of a basic Network Block Device (NBD) server and client written
+in Rust.  NBD is a Linux kernel feature that exports a block device over the
+network, with commands for reading and writing blocks of the device by offset.
+The kernel natively supports NBD, but you do need `sudo modprobe nbd` to
+initialize the kernel module.
+
+This code implements:
+- Rust modules that implement the client and server parts of the NBD protocol.
+- A userspace NBD server that is compatible with Linux.
+- A Rust re-implementation of the `nbd-client` utility (from the [standard userland tools](https://github.com/NetworkBlockDevice/nbd)). This avoids needing to install anything extra to use NBD.
+
+All of the interactions with the kernel are very Linux-specific, but the server
+does run on macOS and the client library should be able to interact with it.
+
+Here's a quick demo of running the server and connecting with the client:
 
 ```
 $ cargo run --release -- --size 1000 disk.img &
 $ sudo modprobe nbd
-$ cargo run --release --bin client -- /dev/nbd0
+$ cargo run --bin client -- /dev/nbd0
 ```
 
-Now we can interact with `/dev/nbd0` as with any other block device, for example
-creating an ext4 file system backed by the remote server:
+The client automatically escalates to root with `sudo` in order to have the
+necessary privilege to set up the block device.  Now we can interact with
+`/dev/nbd0` as with any other block device, for example with `dd` (more
+interestingly, you can use `mkfs.ext` to create a file system there and then
+`mount` it):
 
 ```
 $ sudo chown $USER /dev/nbd0
-$ mkfs -t ext4 /dev/nbd0
-$ mkdir /mnt/nbd
-$ sudo mount /dev/nbd0 /mnt/nbd
+$ dd if=/dev/zero of=/dev/nbd0 bs=4
 ```
 
 Finally, make sure to disconnect before running again:
 
 ```
-$ cargo run --release --bin client -- --disconnect /dev/nbd0
+$ cargo run --bin client -- --disconnect /dev/nbd0
 ```

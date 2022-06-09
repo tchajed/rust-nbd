@@ -85,6 +85,7 @@ fn test_connect_to_server() -> Result<()> {
         .args(["--size", "10"])
         .spawn()
         .expect("failed to start server");
+    // wait for server to start listening for connections
     sleep(Duration::from_millis(100));
 
     // client should fork and terminate
