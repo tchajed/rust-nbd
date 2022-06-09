@@ -51,6 +51,13 @@ pub fn set_blksize(f: &File, blksize: u64) -> io::Result<()> {
     Ok(())
 }
 
+/// Set size in bytes for an NBD device opened at `f`.
+pub fn set_size(f: &File, bytes: u64) -> io::Result<()> {
+    let fd = f.as_raw_fd();
+    unsafe { ioctl::set_size(fd, bytes as ioctl_param_type)? };
+    Ok(())
+}
+
 /// Set size in blocks for an NBD device opened at `f`.
 pub fn set_size_blocks(f: &File, blocks: u64) -> io::Result<()> {
     let fd = f.as_raw_fd();

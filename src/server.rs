@@ -401,12 +401,11 @@ impl<F: Blocks> Server<F> {
     /// Returns Ok(()) when client gracefully disconnects.
     pub fn handle_client<IO: Read + Write>(&self, mut stream: IO) -> Result<()> {
         let flags = Self::initial_handshake(&mut stream).wrap_err("initial handshake failed")?;
-        info!("handshake with {:?}", flags);
         if let Some(export) = self
             .handshake_haggle(&mut stream, flags)
             .wrap_err("handshake haggling failed")?
         {
-            info!("handshake finished");
+            info!("handshake finished with {:?}", flags);
             let r = Server::handle_ops(export, &mut stream).wrap_err("handling client operations");
             if let Err(err) = r {
                 // if the error is due to UnexpectedEof, then the client closed

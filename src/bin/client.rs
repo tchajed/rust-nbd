@@ -17,12 +17,14 @@ fn main() -> Result<()> {
         .write(true)
         .open("/dev/nbd0")
         .wrap_err("opening nbd device")?;
-    kernel::set_blksize(&nbd, 4096)?;
-    kernel::set_size_blocks(&nbd, size / 4096)?;
     kernel::clear_sock(&nbd)?;
+    _ = kernel::set_blksize(&nbd, 4096);
+    _ = kernel::set_size_blocks(&nbd, size / 4096);
+    _ = kernel::set_size(&nbd, size);
 
     let sock = client.into_raw_fd();
     kernel::set_sock(&nbd, sock)?;
     kernel::do_it(&nbd)?;
+
     Ok(())
 }
