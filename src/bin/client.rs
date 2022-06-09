@@ -1,5 +1,5 @@
 use clap::Parser;
-use color_eyre::eyre::WrapErr;
+use color_eyre::eyre::{bail, WrapErr};
 use color_eyre::Result;
 use fork::{daemon, Fork};
 
@@ -34,6 +34,10 @@ fn main() -> Result<()> {
     env_logger::init();
 
     let args = Args::parse();
+
+    if let Err(err) = sudo::escalate_if_needed() {
+        bail!("could not get sudo privilege: {}", err);
+    }
 
     if args.disconnect {
         let nbd = open_nbd(&args)?;
