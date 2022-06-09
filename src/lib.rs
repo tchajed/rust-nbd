@@ -53,6 +53,20 @@ mod tests {
     }
 
     #[test]
+    fn client_hard_disconnect() -> Result<()> {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let data = vec![1u8; 1024 * 10];
+        let (s_handle, client) = start_server_client(data)?;
+
+        // we don't call disconnect on client, but drop it to close the connection
+        drop(client);
+
+        s_handle.join().unwrap()?;
+        Ok(())
+    }
+
+    #[test]
     fn run_client_server_read_write() -> Result<()> {
         let _ = env_logger::builder().is_test(true).try_init();
 

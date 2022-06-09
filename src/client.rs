@@ -1,4 +1,5 @@
 //! Basic NBD client that works with this crate's server.
+#![deny(missing_docs)]
 
 use color_eyre::eyre::bail;
 use color_eyre::Result;
@@ -124,6 +125,7 @@ impl<IO: Read + Write> Client<IO> {
         Ok(())
     }
 
+    /// Disconnect from server cleanly and consume this client.
     pub fn disconnect(mut self) -> Result<()> {
         Request::new(Cmd::DISCONNECT, 0, 0).put(&[], &mut self.conn)?;
         Ok(())

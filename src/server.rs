@@ -323,7 +323,13 @@ impl<F: Blocks> Server<F> {
         let mut buf = vec![0u8; 4096 * 64];
         loop {
             assert_eq!(buf.len(), 4096 * 64);
-            let req = Request::get(stream, &mut buf)?;
+            let req = match Request::get(stream, &mut buf)? {
+                Some(req) => req,
+                None => {
+                    // client closed connection and disconnected
+                    return Ok(());
+                }
+            };
             info!(target: "nbd", "{:?}", req);
             match req.typ {
                 Cmd::READ => match export.read(req.offset, req.len, &mut buf) {
