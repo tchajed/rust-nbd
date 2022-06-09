@@ -105,6 +105,7 @@ fn test_connect_to_server() -> Result<()> {
         .status()?;
 
     server.kill()?;
+    server.wait()?;
     Ok(())
 }
 
@@ -142,5 +143,6 @@ fn test_foreground_client() -> Result<()> {
     assert!(s.success(), "client --foreground failed: {s}");
 
     server.kill()?;
+    server.wait()?;
     Ok(())
 }
