@@ -1,6 +1,7 @@
 //! Integration tests for the client and server binaries.
 
 use std::os::unix::fs::FileExt;
+use std::path::Path;
 use std::{
     env,
     fs::OpenOptions,
@@ -73,14 +74,18 @@ fn use_dev(path: &str) -> Result<()> {
 // nbd only works on Linux
 #[cfg_attr(not(target_os = "linux"), ignore)]
 fn test_connect_to_server() -> Result<()> {
+    let dev = "/dev/nbd1";
+    if !Path::new(dev).exists() {
+        eprintln!("nbd is not set up (run sudo modprobe nbd)");
+        return Ok(());
+    }
+
     let mut server = Command::new(exe_path("server"))
         .arg("--mem")
         .args(["--size", "10"])
         .spawn()
         .expect("failed to start server");
     sleep(Duration::from_millis(100));
-
-    let dev = "/dev/nbd1";
 
     // client should fork and terminate
     let s = Command::new(exe_path("client")).arg(dev).status()?;
@@ -108,14 +113,19 @@ fn test_connect_to_server() -> Result<()> {
 // nbd only works on Linux
 #[cfg_attr(not(target_os = "linux"), ignore)]
 fn test_foreground_client() -> Result<()> {
+    let dev = "/dev/nbd1";
+
+    if !Path::new(dev).exists() {
+        eprintln!("nbd is not set up (run sudo modprobe nbd)");
+        return Ok(());
+    }
+
     let mut server = Command::new(exe_path("server"))
         .arg("--mem")
         .args(["--size", "10"])
         .spawn()
         .expect("failed to start server");
     sleep(Duration::from_millis(100));
-
-    let dev = "/dev/nbd1";
 
     let mut client = Command::new(exe_path("client"))
         .arg("--foreground")

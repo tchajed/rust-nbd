@@ -25,5 +25,7 @@ jobs:
           rustup default ${{ matrix.toolchain }}
           rustup component add clippy
       - run: cargo build --verbose
-      - run: cargo test --verbose
+      - run: |
+          sudo modprobe nbd
+          cargo test --verbose
       - run: cargo clippy --no-deps -- -D clippy::all
