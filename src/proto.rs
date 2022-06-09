@@ -348,9 +348,7 @@ impl Request {
     }
 
     /// Get reads the next request, storing the data for a write request in buf.
-    ///
-    /// Returns None if the connection is closed.
-    pub fn get<IO: Read>(stream: &mut IO, buf: &mut [u8]) -> Result<Option<Self>> {
+    pub fn get<IO: Read>(stream: &mut IO, buf: &mut [u8]) -> Result<Self> {
         // C: 32 bits, 0x25609513, magic (NBD_REQUEST_MAGIC)
         // C: 16 bits, command flags
         // C: 16 bits, type
@@ -358,12 +356,7 @@ impl Request {
         // C: 64 bits, offset (unsigned)
         // C: 32 bits, length (unsigned)
         // C: (length bytes of data if the request is of type NBD_CMD_WRITE)
-        let mut magic_buf = [0u8; 4];
-        let n = stream.read(&mut magic_buf)?;
-        if n == 0 {
-            return Ok(None);
-        }
-        let magic = u32::from_be_bytes(magic_buf);
+        let magic = stream.read_u32::<BE>()?;
         if magic != REQUEST_MAGIC {
             bail!(ProtocolError(format!("wrong request magic {}", magic)));
         }
@@ -385,14 +378,14 @@ impl Request {
         } else {
             data_len = 0;
         };
-        Ok(Some(Self {
+        Ok(Self {
             flags,
             typ,
             handle,
             offset,
             len,
             data_len,
-        }))
+        })
     }
 }
 
@@ -518,7 +511,7 @@ mod tests {
         };
         let mut buf = vec![];
         req.clone().put(&[], &mut buf)?;
-        assert_eq!(Request::get(&mut &buf[..], &mut [])?, Some(req));
+        assert_eq!(Request::get(&mut &buf[..], &mut [])?, req);
         Ok(())
     }
 
@@ -536,7 +529,7 @@ mod tests {
         let mut buf = vec![];
         req.put(&data, &mut buf)?;
         let mut data_read = vec![0; 12];
-        assert_eq!(Request::get(&mut &buf[..], &mut data_read)?, Some(req));
+        assert_eq!(Request::get(&mut &buf[..], &mut data_read)?, req);
         assert_eq!(data, data_read);
         Ok(())
     }

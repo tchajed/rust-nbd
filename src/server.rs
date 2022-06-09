@@ -323,13 +323,7 @@ impl<F: Blocks> Server<F> {
         let mut buf = vec![0u8; 4096 * 64];
         loop {
             assert_eq!(buf.len(), 4096 * 64);
-            let req = match Request::get(stream, &mut buf)? {
-                Some(req) => req,
-                None => {
-                    // client closed connection and disconnected
-                    return Ok(());
-                }
-            };
+            let req = Request::get(stream, &mut buf)?;
             info!(target: "nbd", "{:?}", req);
             match req.typ {
                 Cmd::READ => match export.read(req.offset, req.len, &mut buf) {
@@ -376,7 +370,17 @@ impl<F: Blocks> Server<F> {
             .wrap_err("handshake haggling failed")?
         {
             info!("handshake finished");
-            Server::handle_ops(export, &mut stream).wrap_err("handling client operations")?;
+            let r = Server::handle_ops(export, &mut stream).wrap_err("handling client operations");
+            if let Err(err) = r {
+                // if the error is due to UnexpectedEof, then the client closed
+                // the connection, which the server should allow gracefully
+                if let Some(err) = err.root_cause().downcast_ref::<io::Error>() {
+                    if err.kind() == io::ErrorKind::UnexpectedEof {
+                        return Ok(());
+                    }
+                }
+                return Err(err);
+            }
         }
         Ok(())
     }
