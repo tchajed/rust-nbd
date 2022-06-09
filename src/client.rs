@@ -6,7 +6,11 @@
 use color_eyre::eyre::bail;
 use color_eyre::Result;
 
-use std::{io::prelude::*, net::TcpStream};
+use std::{
+    io::prelude::*,
+    net::TcpStream,
+    os::unix::io::{IntoRawFd, RawFd},
+};
 
 use byteorder::{ReadBytesExt, WriteBytesExt, BE};
 
@@ -136,8 +140,14 @@ impl<IO: Read + Write> Client<IO> {
 
 impl Client<TcpStream> {
     /// Connect to a server, run handshake, and return the prepared `Client`.
-    pub fn connect(host: String) -> Result<Self> {
+    pub fn connect(host: &str) -> Result<Self> {
         let stream = TcpStream::connect((host, TCP_PORT))?;
         Self::new(stream)
+    }
+}
+
+impl IntoRawFd for Client<TcpStream> {
+    fn into_raw_fd(self) -> RawFd {
+        self.conn.into_raw_fd()
     }
 }
