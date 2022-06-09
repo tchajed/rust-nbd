@@ -81,39 +81,42 @@ impl<IO: Read + Write> Client<IO> {
         self.export.size
     }
 
-    fn get_reply<'a>(&mut self, buf: &'a mut [u8]) -> Result<SimpleReply<'a>> {
+    fn get_reply_data<S: AsRef<str>>(&mut self, method: S, buf: &mut [u8]) -> Result<()> {
         let reply = SimpleReply::get(&mut self.conn, buf)?;
-        Ok(reply)
+        if reply.err != ErrorType::OK {
+            bail!(format!("{} failed: {:?}", method.as_ref(), reply.err))
+        }
+        Ok(())
+    }
+
+    fn get_ack<S: AsRef<str>>(&mut self, method: S) -> Result<()> {
+        self.get_reply_data(method, &mut [])
     }
 
     /// Send a read command to the NBD server.
     pub fn read(&mut self, offset: u64, len: u32) -> Result<Vec<u8>> {
         Request::new(Cmd::READ, offset, len).put(&[], &mut self.conn)?;
         let mut buf = vec![0; len as usize];
-        let reply = self.get_reply(&mut buf[..])?;
-        if reply.err != ErrorType::OK {
-            bail!(format!("read failed: {:?}", reply.err))
-        }
+        self.get_reply_data("read", &mut buf)?;
         Ok(buf)
     }
 
     /// Send a write command to the NBD server.
     pub fn write(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         Request::new(Cmd::WRITE, offset, data.len() as u32).put(data, &mut self.conn)?;
-        let reply = self.get_reply(&mut [])?;
-        if reply.err != ErrorType::OK {
-            bail!(format!("write failed: {:?}", reply.err))
-        }
+        self.get_ack("write")?;
         Ok(())
     }
 
     /// Send a flush command to the NBD server.
     pub fn flush(&mut self) -> Result<()> {
         Request::new(Cmd::FLUSH, 0, 0).put(&[], &mut self.conn)?;
-        let reply = self.get_reply(&mut [])?;
-        if reply.err != ErrorType::OK {
-            bail!(format!("flush failed: {:?}", reply.err))
-        }
+        self.get_ack("flush")?;
+        Ok(())
+    }
+
+    pub fn disconnect(mut self) -> Result<()> {
+        Request::new(Cmd::DISCONNECT, 0, 0).put(&[], &mut self.conn)?;
         Ok(())
     }
 }

@@ -61,7 +61,7 @@ impl Blocks for File {
     }
 }
 
-impl Blocks for RefCell<[u8]> {
+impl Blocks for RefCell<Vec<u8>> {
     fn read_at(&self, buf: &mut [u8], off: u64) -> io::Result<()> {
         let off = off as usize;
         if off + buf.len() >= self.borrow().len() {
@@ -336,7 +336,10 @@ impl<F: Blocks> Server<F> {
                         SimpleReply::err(err, &req).put(stream)?;
                     }
                 },
-                Cmd::DISCONNECT => return Ok(()),
+                Cmd::DISCONNECT => {
+                    // don't send a reply - RFC says server can send an ACK, but Linux client closes the connection immediately
+                    return Ok(());
+                }
                 Cmd::FLUSH => {
                     export.flush()?;
                     SimpleReply::ok(&req).put(stream)?;
@@ -352,15 +355,18 @@ impl<F: Blocks> Server<F> {
         }
     }
 
-    fn handle_client<IO: Read + Write>(&self, stream: &mut IO) -> Result<()> {
-        let flags = Self::initial_handshake(stream).wrap_err("initial handshake failed")?;
+    /// Handshake and communicate with a client on a single connection.
+    ///
+    /// Returns Ok(()) when client gracefully disconnects.
+    pub fn handle_client<IO: Read + Write>(&self, mut stream: IO) -> Result<()> {
+        let flags = Self::initial_handshake(&mut stream).wrap_err("initial handshake failed")?;
         info!("handshake with {:?}", flags);
         if let Some(export) = self
-            .handshake_haggle(stream, flags)
+            .handshake_haggle(&mut stream, flags)
             .wrap_err("handshake haggling failed")?
         {
             info!("handshake finished");
-            Server::handle_ops(export, stream).wrap_err("handling client operations")?;
+            Server::handle_ops(export, &mut stream).wrap_err("handling client operations")?;
         }
         Ok(())
     }
@@ -373,11 +379,11 @@ impl<F: Blocks> Server<F> {
         let addr = ("127.0.0.1", TCP_PORT);
         let listener = TcpListener::bind(addr)?;
         for stream in listener.incoming() {
-            let mut stream = stream?;
+            let stream = stream?;
             stream.set_nodelay(true)?;
             info!(target: "nbd", "client connected");
             // TODO: how to process clients in parallel? self has to be shared among threads
-            match self.handle_client(&mut stream) {
+            match self.handle_client(stream) {
                 Ok(_) => info!(target: "nbd", "client disconnected"),
                 Err(err) => eprintln!("error handling client:\n{:?}", err),
             }

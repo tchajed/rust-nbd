@@ -7,7 +7,7 @@
 #![allow(non_camel_case_types)]
 use color_eyre::eyre::{bail, ensure, WrapErr};
 use color_eyre::Result;
-use log::warn;
+use log::{error, warn};
 use rand::Rng;
 use std::error::Error;
 use std::fmt;
@@ -315,13 +315,14 @@ impl fmt::Debug for Request {
 impl Request {
     pub fn new(typ: Cmd, offset: u64, len: u32) -> Self {
         let handle = rand::thread_rng().gen::<u64>();
+        let data_len = if typ == Cmd::WRITE { len as usize } else { 0 };
         Request {
             flags: CmdFlags::empty(),
             typ,
             handle,
             offset,
             len,
-            data_len: len as usize,
+            data_len,
         }
     }
 
@@ -330,6 +331,12 @@ impl Request {
     /// data (required only for a Cmd::WRITE) is not part of a Request and must
     /// be included separately.
     pub fn put<IO: Write>(self, data: &[u8], stream: &mut IO) -> Result<()> {
+        assert!(
+            self.data_len <= data.len(),
+            "not enough data passed for request {} > {}",
+            self.data_len,
+            data.len(),
+        );
         stream.write_u32::<BE>(REQUEST_MAGIC)?;
         stream.write_u16::<BE>(self.flags.bits())?;
         stream.write_u16::<BE>(self.typ.into())?;
@@ -440,7 +447,12 @@ impl<'a> SimpleReply<'a> {
     }
 
     pub fn get<IO: Read>(stream: &mut IO, buf: &'a mut [u8]) -> Result<Self> {
-        let magic = stream.read_u32::<BE>()?;
+        let mut magic_buf = [0u8; 4];
+        let n = stream.read(&mut magic_buf)?;
+        if n == 0 {
+            error!("socket is closed for reading");
+        }
+        let magic = u32::from_be_bytes(magic_buf);
         if magic != SIMPLE_REPLY_MAGIC {
             bail!(ProtocolError::new(format!("wrong reply magic {magic}")));
         }
