@@ -32,7 +32,7 @@ interestingly, you can use `mkfs.ext` to create a file system there and then
 
 ```
 $ sudo chown $USER /dev/nbd0
-$ dd if=/dev/zero of=/dev/nbd0 bs=4
+$ dd if=/dev/zero of=/dev/nbd0 bs=4096
 ```
 
 Finally, make sure to disconnect before running again:
