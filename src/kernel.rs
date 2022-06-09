@@ -1,5 +1,10 @@
 //! Library for interacting with the kernel component of NBD, using ioctls.
 //!
+//! The setup implemented here is normally carried out by `nbd-client` on Linux.
+//! The
+//! [nbd-client.c](https://github.com/NetworkBlockDevice/nbd/blob/master/nbd-client.c)
+//! source code was helpful for developing this library.
+//!
 //! The way the NBD API works is that loading the kernel module initializes the
 //! devices `/dev/nbd0`, `/dev/nbd1`, and so on, as special files. Then the
 //! kernel has a way of associating these files with remote servers; from then
@@ -109,7 +114,7 @@ fn set_flags(f: &File, flags: TransmitFlags) -> io::Result<()> {
     Ok(())
 }
 
-/// Set up NBD device file to connect to a connected client.o
+/// Set up NBD device file to connect to a connected client.
 ///
 /// `nbd` should be an open NBD device file (eg, /dev/nbd0).
 ///
@@ -117,6 +122,50 @@ fn set_flags(f: &File, flags: TransmitFlags) -> io::Result<()> {
 /// descriptor, since this is what is sent to the kernel. In practice a
 /// `TcpStream` is likely to be this connection, but it could also be a socket
 /// to an in-process server.
+///
+/// The protocol here is probably best reverse-engineered by running an NBD
+/// server (`cargo run` will work), then running `strace` over `nbd-client` (run
+/// this with `sudo -i` - you don't want to run `strace` on `sudo`, it's more
+/// confusing)
+///
+/// `strace nbd-client -N default -nonetlink localhost /dev/nbd0 1>/dev/null`
+///
+/// ```txt
+/// connect(4, {sa_family=AF_INET, sin_port=htons(10809), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+/// setsockopt(4, SOL_TCP, TCP_NODELAY, [1], 4) = 0
+/// write(1, "Negotiation: ", 13)           = 13
+/// read(4, "NBDMAGIC", 8)                  = 8
+/// write(1, ".", 1)                        = 1
+/// read(4, "IHAVEOPT", 8)                  = 8
+/// write(1, ".", 1)                        = 1
+/// read(4, "\0\3", 2)                      = 2
+/// write(4, "\0\0\0\3", 4)                 = 4
+/// write(4, "IHAVEOPT\0\0\0\7\0\0\0\r", 16) = 16
+/// write(4, "\0\0\0\7", 4)                 = 4
+/// write(4, "default", 7)                  = 7
+/// write(4, "\0\0", 2)                     = 2
+/// read(4, "\0\3\350\211\4Ue\251\0\0\0\7\0\0\0\3\0\0\0\f", 20) = 20
+/// read(4, "\0\0\0\0\0\0\0\240\0\0\0\r", 12) = 12
+/// write(1, "size = 10MB", 11)             = 11
+/// write(1, "\n", 1)                       = 1
+/// read(4, "\0\3\350\211\4Ue\251\0\0\0\7\0\0\0\1\0\0\0\0", 20) = 20
+/// ioctl(3, NBD_SET_BLKSIZE, 512)          = 0
+/// ioctl(3, NBD_SET_SIZE_BLOCKS, 20480)    = 0
+/// write(2, "bs=512, sz=10485760 bytes\n", 26bs=512, sz=10485760 bytes
+/// ) = 26
+/// ioctl(3, NBD_CLEAR_SOCK)                = 0
+/// ioctl(3, NBD_SET_FLAGS, NBD_FLAG_HAS_FLAGS|NBD_FLAG_SEND_FLUSH|NBD_FLAG_SEND_FUA) = 0
+/// ioctl(3, BLKROSET, [0])                 = 0
+/// ioctl(3, NBD_SET_SOCK, 4)               = 0
+/// clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f78b1811c10) = 25208
+/// ```
+///
+/// You can see that fd 4 is a connection to the server, there's a bunch of
+/// traffic for the initial negotiation, and then the `ioctl(3, ...)` are the
+/// interesting part. From earlier in the trace, we can see fd 3 is `/dev/nbd0`.
+/// Then we see a handful of configuration ioctl calls followed by `ioctl(3,
+/// NBD_SET_SOCK, 4)`, which is the really important part. Then the process
+/// calls `clone` to keep running in the background.
 pub fn set_client<IO: Read + Write + IntoRawFd>(nbd: &File, client: Client<IO>) -> Result<()> {
     let size = client.size();
     set_blksize(nbd, 4096)?;
@@ -141,9 +190,24 @@ pub fn wait(nbd: &File) -> Result<()> {
 /// Close an initialized NBD device, terminating the connection with the client.
 ///
 /// Does not signal if there was an existing connection or not.
+///
+/// Similar to [`set_client`], we can investigate this with strace:
+///
+/// `strace nbd-client -d -nonetlink /dev/nbd0 1>/dev/null`
+///
+/// ```txt
+/// openat(AT_FDCWD, "/dev/nbd0", O_RDWR)   = 3
+/// write(1, "disconnect, ", 12)            = 12
+/// ioctl(3, NBD_DISCONNECT)                = 0
+/// write(1, "sock, ", 6)                   = 6
+/// ioctl(3, NBD_CLEAR_SOCK)                = 0
+/// write(1, "done", 4)                     = 4
+/// write(1, "\n", 1)                       = 1
+/// close(3)                                = 0
+/// ```
 pub fn close(nbd: &File) -> Result<()> {
-    clear_sock(nbd).wrap_err("could not clear socket")?;
     disconnect(nbd).wrap_err("could not disconnect")?;
+    clear_sock(nbd).wrap_err("could not clear socket")?;
 
     Ok(())
 }
