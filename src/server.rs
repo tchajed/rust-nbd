@@ -26,8 +26,9 @@ use crate::proto::*;
 /// read/write API that works on arbitrary offsets.
 ///
 /// Blocks is implemented for unix files (using the underlying `pread` and
-/// `pwrite` system calls) and for `RefCell<[u8]>` for exporting an in-memory
-/// byte array.
+/// `pwrite` system calls) and for [`MemBlocks`] for exporting an in-memory byte
+/// array (this is an alias to a `RefCell<Vec<u8>>` and thus must be used in a
+/// single-threaded context).
 pub trait Blocks {
     /// Fill buf starting from off (reading `buf.len()` bytes)
     fn read_at(&self, buf: &mut [u8], off: u64) -> io::Result<()>;
@@ -63,7 +64,7 @@ impl Blocks for File {
 
 /// MemBlocks is a convenience for an in-memory implementation of Blocks using
 /// an array of bytes.
-type MemBlocks = RefCell<Vec<u8>>;
+pub type MemBlocks = RefCell<Vec<u8>>;
 
 impl Blocks for MemBlocks {
     fn read_at(&self, buf: &mut [u8], off: u64) -> io::Result<()> {
@@ -105,13 +106,12 @@ impl Blocks for MemBlocks {
 mod tests {
     use color_eyre::Result;
 
-    use super::Blocks;
-    use std::cell::RefCell;
+    use super::{Blocks, MemBlocks};
 
     #[test]
     fn test_mem_blocks() -> Result<()> {
         let data = vec![1u8; 10];
-        let file = RefCell::new(data);
+        let file = MemBlocks::new(data);
 
         let mut buf = [0u8; 3];
         file.read_at(&mut buf, 7)?;

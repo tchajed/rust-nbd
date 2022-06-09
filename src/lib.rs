@@ -7,11 +7,9 @@ mod tests {
     use color_eyre::Result;
     use readwrite::ReadWrite;
     use std::io::prelude::*;
-    use std::{
-        cell::RefCell,
-        thread::{self, JoinHandle},
-    };
+    use std::thread::{self, JoinHandle};
 
+    use crate::server::MemBlocks;
     use crate::{client::Client, server::Server};
 
     struct ServerClient<IO: Read + Write> {
@@ -35,7 +33,7 @@ mod tests {
         let s2 = ReadWrite::new(r2, w1);
 
         let s_handle = thread::spawn(move || -> Result<()> {
-            let server = Server::new(RefCell::new(data));
+            let server = Server::new(MemBlocks::new(data));
             server.handle_client(s1)?;
             Ok(())
         });

@@ -1,8 +1,8 @@
 use clap::Parser;
 use color_eyre::Result;
-use std::{cell::RefCell, fs::OpenOptions};
+use std::fs::OpenOptions;
 
-use nbd::server::Server;
+use nbd::server::{MemBlocks, Server};
 
 #[derive(Parser, Debug)]
 #[clap(version, about, long_about = None)]
@@ -30,7 +30,7 @@ fn main() -> Result<()> {
 
     if args.mem {
         let data = vec![0u8; size_bytes as usize];
-        let export = RefCell::new(data);
+        let export = MemBlocks::new(data);
         Server::new(export).start()?;
         return Ok(());
     }
