@@ -61,7 +61,11 @@ impl Blocks for File {
     }
 }
 
-impl Blocks for RefCell<Vec<u8>> {
+/// MemBlocks is a convenience for an in-memory implementation of Blocks using
+/// an array of bytes.
+type MemBlocks = RefCell<Vec<u8>>;
+
+impl Blocks for MemBlocks {
     fn read_at(&self, buf: &mut [u8], off: u64) -> io::Result<()> {
         let off = off as usize;
         if off + buf.len() >= self.borrow().len() {

@@ -6,22 +6,25 @@ pub mod server;
 mod tests {
     use color_eyre::Result;
     use readwrite::ReadWrite;
-    use std::{cell::RefCell, thread};
+    use std::io::prelude::*;
+    use std::{
+        cell::RefCell,
+        thread::{self, JoinHandle},
+    };
 
     use crate::{
         client::Client,
         server::{Export, Server},
     };
 
-    #[test]
-    fn run_client_server_handshake() -> Result<()> {
-        let _ = env_logger::builder().is_test(true).try_init();
+    fn start_server_client(
+        data: Vec<u8>,
+    ) -> Result<(JoinHandle<Result<()>>, Client<impl Read + Write>)> {
         let (r1, w1) = pipe::pipe();
         let (r2, w2) = pipe::pipe();
         let s1 = ReadWrite::new(r1, w2);
         let s2 = ReadWrite::new(r2, w1);
 
-        let data = vec![1u8; 1024 * 10];
         let export = Export {
             name: "default".to_string(),
             file: RefCell::new(data),
@@ -32,7 +35,29 @@ mod tests {
             Ok(())
         });
 
-        let mut client = Client::new(s2)?;
+        let client = Client::new(s2)?;
+
+        Ok((s_handle, client))
+    }
+
+    #[test]
+    fn run_client_server_handshake() -> Result<()> {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let data = vec![1u8; 1024 * 10];
+        let (s_handle, client) = start_server_client(data)?;
+
+        client.disconnect()?;
+        s_handle.join().unwrap()?;
+        Ok(())
+    }
+
+    #[test]
+    fn run_client_server_read_write() -> Result<()> {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let data = vec![1u8; 1024 * 10];
+        let (s_handle, mut client) = start_server_client(data)?;
 
         let buf = client.read(3, 5)?;
         assert_eq!(buf, [1u8; 5]);
@@ -42,7 +67,6 @@ mod tests {
         assert_eq!(buf, [1, 1, 9, 9]);
 
         client.disconnect()?;
-
         s_handle.join().unwrap()?;
         Ok(())
     }
