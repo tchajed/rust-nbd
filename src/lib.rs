@@ -1,4 +1,5 @@
 pub mod client;
+mod kernel;
 mod proto;
 pub mod server;
 
