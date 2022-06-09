@@ -110,7 +110,9 @@ fn set_flags(f: &File, flags: TransmitFlags) -> io::Result<()> {
     Ok(())
 }
 
-/// Set up NBD device open at `nbd` to connect to `client`.
+/// Set up NBD device file to connect to a connected client.o
+///
+/// `nbd` should be an open NBD device file (eg, /dev/nbd0).
 ///
 /// Client must use an underlying connection which is based on a raw file
 /// descriptor, since this is what is sent to the kernel. In practice a
@@ -118,16 +120,16 @@ fn set_flags(f: &File, flags: TransmitFlags) -> io::Result<()> {
 /// to an in-process server.
 pub fn set_client<IO: Read + Write + IntoRawFd>(nbd: &File, client: Client<IO>) -> Result<()> {
     let size = client.size();
-    set_blksize(&nbd, 4096)?;
-    set_size_blocks(&nbd, size / 4096)?;
+    set_blksize(nbd, 4096)?;
+    set_size_blocks(nbd, size / 4096)?;
 
     let flags = TransmitFlags::HAS_FLAGS | TransmitFlags::SEND_FLUSH;
-    set_flags(&nbd, flags)?;
+    set_flags(nbd, flags)?;
 
-    clear_sock(&nbd)?;
+    clear_sock(nbd)?;
 
     let sock = client.into_raw_fd();
-    set_sock(&nbd, sock).wrap_err("could not set nbd sock")?;
+    set_sock(nbd, sock).wrap_err("could not set nbd sock")?;
     Ok(())
 }
 
@@ -141,8 +143,8 @@ pub fn wait(nbd: &File) -> Result<()> {
 ///
 /// Does not signal if there was an existing connection or not.
 pub fn close(nbd: &File) -> Result<()> {
-    clear_sock(&nbd).wrap_err("could not clear socket")?;
-    disconnect(&nbd).wrap_err("could not disconnect")?;
+    clear_sock(nbd).wrap_err("could not clear socket")?;
+    disconnect(nbd).wrap_err("could not disconnect")?;
 
     Ok(())
 }
