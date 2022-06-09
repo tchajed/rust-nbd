@@ -17,9 +17,21 @@ mod tests {
         server::{Export, Server},
     };
 
-    fn start_server_client(
-        data: Vec<u8>,
-    ) -> Result<(JoinHandle<Result<()>>, Client<impl Read + Write>)> {
+    struct ServerClient<IO: Read + Write> {
+        server: JoinHandle<Result<()>>,
+        client: Client<IO>,
+    }
+
+    impl<IO: Read + Write> ServerClient<IO> {
+        fn shutdown(self) -> Result<()> {
+            self.client.disconnect()?;
+            self.server.join().unwrap()?;
+            Ok(())
+        }
+    }
+
+    fn start_server_client(data: Vec<u8>) -> Result<ServerClient<impl Read + Write>> {
+        let _ = env_logger::builder().is_test(true).try_init();
         let (r1, w1) = pipe::pipe();
         let (r2, w2) = pipe::pipe();
         let s1 = ReadWrite::new(r1, w2);
@@ -37,41 +49,51 @@ mod tests {
 
         let client = Client::new(s2)?;
 
-        Ok((s_handle, client))
+        Ok(ServerClient {
+            server: s_handle,
+            client,
+        })
     }
 
     #[test]
     fn run_client_server_handshake() -> Result<()> {
-        let _ = env_logger::builder().is_test(true).try_init();
-
         let data = vec![1u8; 1024 * 10];
-        let (s_handle, client) = start_server_client(data)?;
+        let sc = start_server_client(data)?;
 
-        client.disconnect()?;
-        s_handle.join().unwrap()?;
+        sc.shutdown()?;
         Ok(())
     }
 
     #[test]
     fn client_hard_disconnect() -> Result<()> {
-        let _ = env_logger::builder().is_test(true).try_init();
-
         let data = vec![1u8; 1024 * 10];
-        let (s_handle, client) = start_server_client(data)?;
+        let ServerClient { server, client } = start_server_client(data)?;
 
         // we don't call disconnect on client, but drop it to close the connection
         drop(client);
+        // server should not error in this situation
+        server.join().unwrap()?;
 
-        s_handle.join().unwrap()?;
+        Ok(())
+    }
+
+    #[test]
+    fn client_export_size() -> Result<()> {
+        let len = 15341;
+        let data = vec![1u8; len];
+        let sc = start_server_client(data)?;
+
+        assert_eq!(sc.client.size(), len as u64);
+
+        sc.shutdown()?;
         Ok(())
     }
 
     #[test]
     fn run_client_server_read_write() -> Result<()> {
-        let _ = env_logger::builder().is_test(true).try_init();
-
         let data = vec![1u8; 1024 * 10];
-        let (s_handle, mut client) = start_server_client(data)?;
+        let mut sc = start_server_client(data)?;
+        let client = &mut sc.client;
 
         let buf = client.read(3, 5)?;
         assert_eq!(buf, [1u8; 5]);
@@ -80,8 +102,7 @@ mod tests {
         let buf = client.read(2, 4)?;
         assert_eq!(buf, [1, 1, 9, 9]);
 
-        client.disconnect()?;
-        s_handle.join().unwrap()?;
+        sc.shutdown()?;
         Ok(())
     }
 }
