@@ -330,7 +330,7 @@ impl Request {
     ///
     /// data (required only for a Cmd::WRITE) is not part of a Request and must
     /// be included separately.
-    pub fn put<IO: Write>(self, data: &[u8], stream: &mut IO) -> Result<()> {
+    pub fn put<IO: Write>(&self, data: &[u8], stream: &mut IO) -> Result<()> {
         assert!(
             self.data_len <= data.len(),
             "not enough data passed for request {} > {}",
@@ -527,7 +527,7 @@ mod tests {
         };
         let data = vec![1; 12];
         let mut buf = vec![];
-        req.clone().put(&data, &mut buf)?;
+        req.put(&data, &mut buf)?;
         let mut data_read = vec![0; 12];
         assert_eq!(Request::get(&mut &buf[..], &mut data_read)?, req);
         assert_eq!(data, data_read);

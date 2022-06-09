@@ -81,37 +81,46 @@ impl<IO: Read + Write> Client<IO> {
         self.export.size
     }
 
-    fn get_reply_data<S: AsRef<str>>(&mut self, method: S, buf: &mut [u8]) -> Result<()> {
+    fn get_reply_data(&mut self, req: &Request, buf: &mut [u8]) -> Result<()> {
         let reply = SimpleReply::get(&mut self.conn, buf)?;
+        if reply.handle != req.handle {
+            bail!(format!(
+                "reply for wrong handle {} != {}",
+                reply.handle, req.handle
+            ))
+        }
         if reply.err != ErrorType::OK {
-            bail!(format!("{} failed: {:?}", method.as_ref(), reply.err))
+            bail!(format!("{:?} failed: {:?}", req.typ, reply.err))
         }
         Ok(())
     }
 
-    fn get_ack<S: AsRef<str>>(&mut self, method: S) -> Result<()> {
-        self.get_reply_data(method, &mut [])
+    fn get_ack(&mut self, req: &Request) -> Result<()> {
+        self.get_reply_data(req, &mut [])
     }
 
     /// Send a read command to the NBD server.
     pub fn read(&mut self, offset: u64, len: u32) -> Result<Vec<u8>> {
-        Request::new(Cmd::READ, offset, len).put(&[], &mut self.conn)?;
+        let req = Request::new(Cmd::READ, offset, len);
+        req.put(&[], &mut self.conn)?;
         let mut buf = vec![0; len as usize];
-        self.get_reply_data("read", &mut buf)?;
+        self.get_reply_data(&req, &mut buf)?;
         Ok(buf)
     }
 
     /// Send a write command to the NBD server.
     pub fn write(&mut self, offset: u64, data: &[u8]) -> Result<()> {
-        Request::new(Cmd::WRITE, offset, data.len() as u32).put(data, &mut self.conn)?;
-        self.get_ack("write")?;
+        let req = Request::new(Cmd::WRITE, offset, data.len() as u32);
+        req.put(data, &mut self.conn)?;
+        self.get_ack(&req)?;
         Ok(())
     }
 
     /// Send a flush command to the NBD server.
     pub fn flush(&mut self) -> Result<()> {
-        Request::new(Cmd::FLUSH, 0, 0).put(&[], &mut self.conn)?;
-        self.get_ack("flush")?;
+        let req = Request::new(Cmd::FLUSH, 0, 0);
+        req.put(&[], &mut self.conn)?;
+        self.get_ack(&req)?;
         Ok(())
     }
 
