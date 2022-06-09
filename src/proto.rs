@@ -279,8 +279,7 @@ bitflags! {
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Request {
     // parsed in case we need them later
-    #[allow(dead_code)]
-    flags: CmdFlags,
+    pub flags: CmdFlags,
     pub typ: Cmd,
     pub handle: u64,
     pub offset: u64,

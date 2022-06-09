@@ -183,7 +183,7 @@ impl<F: Blocks> Server<F> {
     // fake constant for the server's supported operations
     #[allow(non_snake_case)]
     fn TRANSMIT_FLAGS() -> TransmitFlags {
-        TransmitFlags::HAS_FLAGS | TransmitFlags::SEND_FLUSH
+        TransmitFlags::HAS_FLAGS | TransmitFlags::SEND_FLUSH | TransmitFlags::SEND_FUA
     }
 
     /// Create a Server that exports blocks.
@@ -352,6 +352,11 @@ impl<F: Blocks> Server<F> {
             assert_eq!(buf.len(), 4096 * 64);
             let req = Request::get(stream, &mut buf)?;
             info!(target: "nbd", "{:?}", req);
+            if req.flags.intersects(CmdFlags::DF | CmdFlags::FAST_ZERO) {
+                warn!(target: "nbd", "unexpected flags {:?}", req.flags);
+                SimpleReply::err(ErrorType::ENOTSUP, &req).put(stream)?;
+                continue;
+            }
             match req.typ {
                 Cmd::READ => match export.read(req.offset, req.len, &mut buf) {
                     Ok(data) => SimpleReply::data(&req, data).put(stream)?,
@@ -361,7 +366,12 @@ impl<F: Blocks> Server<F> {
                     }
                 },
                 Cmd::WRITE => match export.write(req.offset, req.data_len, &buf) {
-                    Ok(_) => SimpleReply::ok(&req).put(stream)?,
+                    Ok(_) => {
+                        if req.flags.contains(CmdFlags::FUA) {
+                            export.flush()?;
+                        }
+                        SimpleReply::ok(&req).put(stream)?;
+                    }
                     Err(err) => {
                         warn!(target: "nbd", "write error {:?}", err);
                         SimpleReply::err(err, &req).put(stream)?;
