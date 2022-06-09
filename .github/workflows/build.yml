@@ -24,6 +24,7 @@ jobs:
           rustup update ${{ matrix.toolchain }}
           rustup default ${{ matrix.toolchain }}
           rustup component add clippy
+      - uses: Swatinem/rust-cache@v1
       - run: cargo build --verbose
       - run: |
           sudo modprobe nbd
