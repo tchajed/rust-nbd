@@ -68,7 +68,7 @@ type MemBlocks = RefCell<Vec<u8>>;
 impl Blocks for MemBlocks {
     fn read_at(&self, buf: &mut [u8], off: u64) -> io::Result<()> {
         let off = off as usize;
-        if off + buf.len() >= self.borrow().len() {
+        if off + buf.len() > self.borrow().len() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "out-of-bounds read",
@@ -81,7 +81,7 @@ impl Blocks for MemBlocks {
 
     fn write_at(&self, buf: &[u8], off: u64) -> io::Result<()> {
         let off = off as usize;
-        if off + buf.len() >= self.borrow().len() {
+        if off + buf.len() > self.borrow().len() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "out-of-bounds write",
@@ -97,6 +97,30 @@ impl Blocks for MemBlocks {
     }
 
     fn flush(&self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use color_eyre::Result;
+
+    use super::Blocks;
+    use std::cell::RefCell;
+
+    #[test]
+    fn test_mem_blocks() -> Result<()> {
+        let data = vec![1u8; 10];
+        let file = RefCell::new(data);
+
+        let mut buf = [0u8; 3];
+        file.read_at(&mut buf, 7)?;
+        assert_eq!(buf, [1, 1, 1]);
+
+        file.write_at(&[3, 4], 8)?;
+
+        file.read_at(&mut buf, 6)?;
+        assert_eq!(buf, [1, 1, 3]);
         Ok(())
     }
 }
