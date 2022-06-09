@@ -510,7 +510,7 @@ mod tests {
             data_len: 0,
         };
         let mut buf = vec![];
-        req.clone().put(&[], &mut buf)?;
+        req.put(&[], &mut buf)?;
         assert_eq!(Request::get(&mut &buf[..], &mut [])?, req);
         Ok(())
     }
