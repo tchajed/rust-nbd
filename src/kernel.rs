@@ -15,7 +15,7 @@ use nix::sys::ioctl::ioctl_param_type;
 
 mod ioctl {
     use nix::{ioctl_none, ioctl_write_int};
-    const NBD_IOCTL: u8 = 0xab;
+    const NBD_IOCTL: u8 = 0xAB;
     ioctl_write_int!(set_sock, NBD_IOCTL, 0);
     ioctl_write_int!(set_blksize, NBD_IOCTL, 1);
     ioctl_write_int!(set_size, NBD_IOCTL, 2);
@@ -52,7 +52,6 @@ pub fn set_blksize(f: &File, blksize: u64) -> io::Result<()> {
 }
 
 /// Set size in blocks for an NBD device opened at `f`.
-#[allow(dead_code)]
 pub fn set_size_blocks(f: &File, blocks: u64) -> io::Result<()> {
     let fd = f.as_raw_fd();
     unsafe { ioctl::set_size_blocks(fd, blocks as ioctl_param_type)? };
