@@ -101,16 +101,18 @@ impl Blocks for MemBlocks {
     }
 }
 
-/// A file to be exported as a block device.
+/// Wrap a Blocks and implement the core NBD operations using its operations.
 #[derive(Debug)]
-pub struct Export<F: Blocks> {
-    /// name of the export (only used for listing)
-    pub name: String,
-    /// file to be exported
-    pub file: F,
-}
+struct Export<F: Blocks>(F);
 
 impl<F: Blocks> Export<F> {
+    /// Name returns the name of the single, default export, for listing purposes.
+    ///
+    /// The server ignores all export names anyway so this name is not important.
+    fn name(&self) -> String {
+        "default".to_string()
+    }
+
     fn read<'a, 'b>(
         &'a self,
         off: u64,
@@ -122,7 +124,7 @@ impl<F: Blocks> Export<F> {
             return Err(ErrorType::EOVERFLOW);
         }
         let buf = &mut buf[..len];
-        match Blocks::read_at(&self.file, buf, off) {
+        match Blocks::read_at(&self.0, buf, off) {
             Ok(_) => Ok(buf),
             Err(err) => Err(ErrorType::from_io_kind(err.kind())),
         }
@@ -133,18 +135,17 @@ impl<F: Blocks> Export<F> {
             return Err(ErrorType::EOVERFLOW);
         }
         let data = &data[..len];
-        Blocks::write_at(&self.file, data, off)
-            .map_err(|err| ErrorType::from_io_kind(err.kind()))?;
+        Blocks::write_at(&self.0, data, off).map_err(|err| ErrorType::from_io_kind(err.kind()))?;
         Ok(())
     }
 
     fn flush(&self) -> io::Result<()> {
-        self.file.flush()?;
+        self.0.flush()?;
         Ok(())
     }
 
     fn size(&self) -> io::Result<u64> {
-        self.file.size().map(|s| s as u64)
+        self.0.size().map(|s| s as u64)
     }
 }
 
@@ -161,9 +162,11 @@ impl<F: Blocks> Server<F> {
         TransmitFlags::HAS_FLAGS | TransmitFlags::SEND_FLUSH
     }
 
-    /// Create a Server for export
-    pub fn new(export: Export<F>) -> Self {
-        Self { export }
+    /// Create a Server that exports blocks.
+    pub fn new(blocks: F) -> Self {
+        Self {
+            export: Export(blocks),
+        }
     }
 
     // agree on basic negotiation flags (only fixed newstyle is supported so
@@ -187,7 +190,7 @@ impl<F: Blocks> Server<F> {
     }
 
     fn send_export_list<IO: Write>(&self, stream: &mut IO) -> Result<()> {
-        ExportList::new(vec![self.export.name.clone()]).put(stream)?;
+        ExportList::new(vec![self.export.name()]).put(stream)?;
         Ok(())
     }
 

@@ -2,7 +2,7 @@ use clap::Parser;
 use color_eyre::Result;
 use std::{cell::RefCell, fs::OpenOptions};
 
-use nbd::server::{Export, Server};
+use nbd::server::Server;
 
 #[derive(Parser, Debug)]
 #[clap(version, about, long_about = None)]
@@ -30,11 +30,7 @@ fn main() -> Result<()> {
 
     if args.mem {
         let data = vec![0u8; size_bytes as usize];
-        let file = RefCell::new(data);
-        let export = Export {
-            name: "default".to_string(),
-            file,
-        };
+        let export = RefCell::new(data);
         Server::new(export).start()?;
         return Ok(());
     }
@@ -47,10 +43,6 @@ fn main() -> Result<()> {
 
     file.set_len(size_bytes)?;
 
-    let export = Export {
-        name: "default".to_string(),
-        file,
-    };
-    Server::new(export).start()?;
+    Server::new(file).start()?;
     Ok(())
 }

@@ -1,10 +1,12 @@
 //! Basic NBD client that works with this crate's server.
+//!
+//! See the documentation for [`Client`].
 #![deny(missing_docs)]
 
 use color_eyre::eyre::bail;
 use color_eyre::Result;
 
-use std::io::prelude::*;
+use std::{io::prelude::*, net::TcpStream};
 
 use byteorder::{ReadBytesExt, WriteBytesExt, BE};
 
@@ -66,7 +68,7 @@ impl<IO: Read + Write> Client<IO> {
         Ok(export)
     }
 
-    /// Establish a handshake with stream and return a Client ready for use.
+    /// Establish a handshake with stream and return a `Client` ready for use.
     pub fn new(mut stream: IO) -> Result<Self> {
         Self::initial_handshake(&mut stream)?;
         let export = Self::handshake_haggle(&mut stream)?;
@@ -129,5 +131,13 @@ impl<IO: Read + Write> Client<IO> {
     pub fn disconnect(mut self) -> Result<()> {
         Request::new(Cmd::DISCONNECT, 0, 0).put(&[], &mut self.conn)?;
         Ok(())
+    }
+}
+
+impl Client<TcpStream> {
+    /// Connect to a server, run handshake, and return the prepared `Client`.
+    pub fn connect(host: String) -> Result<Self> {
+        let stream = TcpStream::connect((host, TCP_PORT))?;
+        Self::new(stream)
     }
 }

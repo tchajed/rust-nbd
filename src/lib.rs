@@ -12,10 +12,7 @@ mod tests {
         thread::{self, JoinHandle},
     };
 
-    use crate::{
-        client::Client,
-        server::{Export, Server},
-    };
+    use crate::{client::Client, server::Server};
 
     struct ServerClient<IO: Read + Write> {
         server: JoinHandle<Result<()>>,
@@ -37,12 +34,8 @@ mod tests {
         let s1 = ReadWrite::new(r1, w2);
         let s2 = ReadWrite::new(r2, w1);
 
-        let export = Export {
-            name: "default".to_string(),
-            file: RefCell::new(data),
-        };
         let s_handle = thread::spawn(move || -> Result<()> {
-            let server = Server::new(export);
+            let server = Server::new(RefCell::new(data));
             server.handle_client(s1)?;
             Ok(())
         });
