@@ -24,11 +24,10 @@
 use color_eyre::eyre::WrapErr;
 use color_eyre::Result;
 
-use std::io::prelude::*;
+use std::io::{self, prelude::*};
 use std::{
     fs::File,
-    io,
-    os::unix::prelude::{AsRawFd, IntoRawFd, RawFd},
+    os::unix::io::{AsRawFd, IntoRawFd, RawFd},
 };
 
 use crate::{client::Client, proto::TransmitFlags};

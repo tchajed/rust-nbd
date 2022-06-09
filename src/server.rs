@@ -8,9 +8,6 @@
 //! the protocol description.
 
 #![deny(missing_docs)]
-use color_eyre::eyre::{bail, WrapErr};
-use color_eyre::Result;
-
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{self, prelude::*};
@@ -18,6 +15,8 @@ use std::net::TcpListener;
 use std::os::unix::fs::FileExt;
 
 use byteorder::{ReadBytesExt, WriteBytesExt, BE};
+use color_eyre::eyre::{bail, WrapErr};
+use color_eyre::Result;
 use log::{info, warn};
 
 use crate::proto::*;
@@ -193,8 +192,7 @@ impl<F: Blocks> Server<F> {
         }
     }
 
-    // agree on basic negotiation flags (only fixed newstyle is supported so
-    // this returns a unit)
+    // Agree on basic negotiation flags.
     fn initial_handshake<IO: Read + Write>(stream: &mut IO) -> Result<HandshakeFlags> {
         stream.write_u64::<BE>(MAGIC)?;
         stream.write_u64::<BE>(IHAVEOPT)?;
@@ -218,7 +216,7 @@ impl<F: Blocks> Server<F> {
         Ok(())
     }
 
-    /// send export info at the end of newstyle negotiation, when client sends NBD_OPT_EXPORT_NAME
+    /// Send export info at the end of newstyle negotiation, when client sends NBD_OPT_EXPORT_NAME.
     fn send_export_info<IO: Write>(&self, stream: &mut IO, flags: HandshakeFlags) -> Result<()> {
         // If the value of the option field is `NBD_OPT_EXPORT_NAME` and the
         // server is willing to allow the export, the server replies with
@@ -352,7 +350,8 @@ impl<F: Blocks> Server<F> {
             assert_eq!(buf.len(), 4096 * 64);
             let req = Request::get(stream, &mut buf)?;
             info!(target: "nbd", "{:?}", req);
-            if req.flags.intersects(CmdFlags::DF | CmdFlags::FAST_ZERO) {
+            // only FUA is supported
+            if req.flags.intersects(CmdFlags::FUA.complement()) {
                 warn!(target: "nbd", "unexpected flags {:?}", req.flags);
                 SimpleReply::err(ErrorType::ENOTSUP, &req).put(stream)?;
                 continue;
@@ -378,7 +377,8 @@ impl<F: Blocks> Server<F> {
                     }
                 },
                 Cmd::DISCONNECT => {
-                    // don't send a reply - RFC says server can send an ACK, but Linux client closes the connection immediately
+                    // don't send a reply - RFC says server can send an ACK, but
+                    // Linux client closes the connection immediately
                     return Ok(());
                 }
                 Cmd::FLUSH => {
