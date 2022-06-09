@@ -4,7 +4,6 @@ use color_eyre::Result;
 use fork::{daemon, Fork};
 
 use std::fs::{File, OpenOptions};
-use std::os::unix::io::IntoRawFd;
 
 use nbd::{client::Client, kernel};
 
@@ -44,13 +43,11 @@ fn main() -> Result<()> {
 
     if args.disconnect {
         let nbd = open_nbd(&args)?;
-        kernel::clear_sock(&nbd).wrap_err("could not disconnect")?;
-        kernel::disconnect(&nbd).wrap_err("could not disconnect")?;
+        kernel::close(&nbd)?;
         return Ok(());
     }
 
     let client = Client::connect(&args.host).wrap_err("connecting to nbd server")?;
-    let size = client.size();
 
     let nbd = match open_nbd(&args) {
         Ok(nbd) => nbd,
@@ -59,19 +56,11 @@ fn main() -> Result<()> {
             return Err(err);
         }
     };
-    kernel::set_blksize(&nbd, 4096)?;
-    kernel::set_size_blocks(&nbd, size / 4096)?;
-    kernel::set_flags(&nbd)?;
-    kernel::clear_sock(&nbd)?;
-
-    let sock = client.into_raw_fd();
-    kernel::set_sock(&nbd, sock).wrap_err("could not set nbd sock")?;
+    kernel::set_client(&nbd, client)?;
 
     if !args.foreground {
         if let Ok(Fork::Child) = daemon(false, false) {
-            kernel::do_it(&nbd)
-                .wrap_err("error waiting for nbd")
-                .unwrap();
+            kernel::wait(&nbd)?;
         }
     }
 
