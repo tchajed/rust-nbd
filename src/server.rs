@@ -11,26 +11,102 @@
 use color_eyre::eyre::{bail, WrapErr};
 use color_eyre::Result;
 
+use std::cell::RefCell;
 use std::fs::File;
 use std::io::{self, prelude::*};
 use std::net::TcpListener;
-use std::os::unix::prelude::FileExt;
+use std::os::unix::fs::FileExt;
 
 use byteorder::{ReadBytesExt, WriteBytesExt, BE};
 use log::{info, warn};
 
 use crate::proto::*;
 
+/// Blocks is a byte array that can be exported by this server, with a basic
+/// read/write API that works on arbitrary offsets.
+///
+/// Blocks is implemented for unix files (using the underlying `pread` and
+/// `pwrite` system calls) and for `RefCell<[u8]>` for exporting an in-memory
+/// byte array.
+pub trait Blocks {
+    /// Fill buf starting from off (reading `buf.len()` bytes)
+    fn read_at(&self, buf: &mut [u8], off: u64) -> io::Result<()>;
+
+    /// Write data from buf to self starting at off (writing `buf.len()` bytes)
+    fn write_at(&self, buf: &[u8], off: u64) -> io::Result<()>;
+
+    /// Get the size of this array (in bytes)
+    fn size(&self) -> io::Result<u64>;
+
+    /// Flush any outstanding writes to stable storage.
+    fn flush(&self) -> io::Result<()>;
+}
+
+impl Blocks for File {
+    fn read_at(&self, buf: &mut [u8], off: u64) -> io::Result<()> {
+        FileExt::read_exact_at(self, buf, off)
+    }
+
+    fn write_at(&self, buf: &[u8], off: u64) -> io::Result<()> {
+        FileExt::write_all_at(self, buf, off)
+    }
+
+    fn size(&self) -> io::Result<u64> {
+        self.metadata().map(|m| m.len())
+    }
+
+    fn flush(&self) -> io::Result<()> {
+        self.sync_all()?;
+        Ok(())
+    }
+}
+
+impl Blocks for RefCell<[u8]> {
+    fn read_at(&self, buf: &mut [u8], off: u64) -> io::Result<()> {
+        let off = off as usize;
+        if off + buf.len() >= self.borrow().len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "out-of-bounds read",
+            ));
+        }
+        let data = self.borrow();
+        buf.copy_from_slice(&data[off..off + buf.len()]);
+        Ok(())
+    }
+
+    fn write_at(&self, buf: &[u8], off: u64) -> io::Result<()> {
+        let off = off as usize;
+        if off + buf.len() >= self.borrow().len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "out-of-bounds write",
+            ));
+        }
+        let mut data = self.borrow_mut();
+        data[off..off + buf.len()].copy_from_slice(buf);
+        Ok(())
+    }
+
+    fn size(&self) -> io::Result<u64> {
+        Ok(self.borrow().len() as u64)
+    }
+
+    fn flush(&self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 /// A file to be exported as a block device.
 #[derive(Debug)]
-pub struct Export {
+pub struct Export<F: Blocks> {
     /// name of the export (only used for listing)
     pub name: String,
     /// file to be exported
-    pub file: File,
+    pub file: F,
 }
 
-impl Export {
+impl<F: Blocks> Export<F> {
     fn read<'a, 'b>(
         &'a self,
         off: u64,
@@ -42,14 +118,8 @@ impl Export {
             return Err(ErrorType::EOVERFLOW);
         }
         let buf = &mut buf[..len];
-        match self.file.read_at(buf, off) {
-            Ok(n) => {
-                if n < len {
-                    warn!(target: "nbd", "short read {n} < {len}");
-                    return Err(ErrorType::EIO);
-                }
-                Ok(buf)
-            }
+        match Blocks::read_at(&self.file, buf, off) {
+            Ok(_) => Ok(buf),
             Err(err) => Err(ErrorType::from_io_kind(err.kind())),
         }
     }
@@ -59,30 +129,28 @@ impl Export {
             return Err(ErrorType::EOVERFLOW);
         }
         let data = &data[..len];
-        self.file
-            .write_all_at(data, off)
+        Blocks::write_at(&self.file, data, off)
             .map_err(|err| ErrorType::from_io_kind(err.kind()))?;
         Ok(())
     }
 
     fn flush(&self) -> io::Result<()> {
-        self.file.sync_data()?;
+        self.file.flush()?;
         Ok(())
     }
 
     fn size(&self) -> io::Result<u64> {
-        let meta = self.file.metadata()?;
-        Ok(meta.len())
+        self.file.size().map(|s| s as u64)
     }
 }
 
 /// Server implements the NBD protocol, with a single export.
 #[derive(Debug)]
-pub struct Server {
-    export: Export,
+pub struct Server<F: Blocks> {
+    export: Export<F>,
 }
 
-impl Server {
+impl<F: Blocks> Server<F> {
     // fake constant for the server's supported operations
     #[allow(non_snake_case)]
     fn TRANSMIT_FLAGS() -> TransmitFlags {
@@ -90,7 +158,7 @@ impl Server {
     }
 
     /// Create a Server for export
-    pub fn new(export: Export) -> Self {
+    pub fn new(export: Export<F>) -> Self {
         Self { export }
     }
 
@@ -210,7 +278,7 @@ impl Server {
         &self,
         stream: &mut IO,
         flags: HandshakeFlags,
-    ) -> Result<Option<&Export>> {
+    ) -> Result<Option<&Export<F>>> {
         loop {
             let opt = Opt::get(stream)?;
             match opt.typ {
@@ -247,7 +315,7 @@ impl Server {
         }
     }
 
-    fn handle_ops<IO: Read + Write>(export: &Export, stream: &mut IO) -> Result<()> {
+    fn handle_ops<IO: Read + Write>(export: &Export<F>, stream: &mut IO) -> Result<()> {
         let mut buf = vec![0u8; 4096 * 64];
         loop {
             assert_eq!(buf.len(), 4096 * 64);
