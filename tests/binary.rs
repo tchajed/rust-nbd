@@ -208,8 +208,8 @@ fn test_concurrent_connections() -> Result<()> {
         .arg("-d")
         .arg(dev2)
         .status()?;
+    sleep(Duration::from_millis(100));
 
-    // let the clients disconnect on their own
     server.kill()?;
     server.wait()?;
     Ok(())
