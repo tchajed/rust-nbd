@@ -223,3 +223,56 @@ fn test_concurrent_connections() -> Result<()> {
     server.wait()?;
     Ok(())
 }
+
+// this test fails due to something to do with a race in the Linux kernel, not
+// our code (as far as I can tell)
+#[ignore]
+#[test]
+#[serial]
+#[cfg_attr(not(target_os = "linux"), ignore)]
+fn test_multiple_connections() -> Result<()> {
+    let dev = "/dev/nbd1";
+    let dev2 = "/dev/nbd2";
+    if !Path::new(dev).exists() {
+        eprintln!("nbd is not set up (run sudo modprobe nbd)");
+        return Ok(());
+    }
+
+    let mut server = Command::new(exe_path("server"))
+        .arg("--mem")
+        .args(["--size", "10"])
+        .spawn()
+        .expect("failed to start server");
+    // wait for server to start listening for connections
+    sleep(Duration::from_millis(100));
+
+    // both clients should be able to connect
+    Command::new(exe_path("client")).arg(dev).status()?;
+    Command::new(exe_path("client")).arg(dev2).status()?;
+    sleep(Duration::from_millis(100));
+
+    Command::new("sudo")
+        .args(["chown", &whoami::username(), dev])
+        .status()
+        .expect("failed to chown");
+    Command::new("sudo")
+        .args(["chown", &whoami::username(), dev2])
+        .status()
+        .expect("failed to chown");
+
+    use_dev(dev)?;
+    check_use_dev(dev2)?;
+
+    Command::new(exe_path("client"))
+        .arg("-d")
+        .arg(dev)
+        .status()?;
+    Command::new(exe_path("client"))
+        .arg("-d")
+        .arg(dev2)
+        .status()?;
+
+    server.kill()?;
+    server.wait()?;
+    Ok(())
+}

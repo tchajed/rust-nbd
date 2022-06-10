@@ -127,8 +127,8 @@ mod tests {
 
         file.write_at(&[3, 4], 8)?;
 
-        file.read_at(&mut buf, 6)?;
-        assert_eq!(buf, [1, 1, 3]);
+        file.read_at(&mut buf, 7)?;
+        assert_eq!(buf, [1, 3, 4]);
         Ok(())
     }
 }
