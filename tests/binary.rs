@@ -183,9 +183,13 @@ fn test_concurrent_connections() -> Result<()> {
     // wait for server to start listening for connections
     sleep(Duration::from_millis(100));
 
-    // both clients should be able to connect
+    // both clients should be able to connect (wait to avoid conflicting on
+    // device, code isn't that robust)
     Command::new(exe_path("client")).arg(dev).status()?;
+    sleep(Duration::from_millis(100));
+
     Command::new(exe_path("client")).arg(dev2).status()?;
+    sleep(Duration::from_millis(100));
 
     Command::new("sudo")
         .args(["chown", &whoami::username(), dev])
