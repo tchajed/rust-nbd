@@ -49,11 +49,7 @@ fn test_server_help_flag() {
 }
 
 fn use_dev(path: &str) -> Result<()> {
-    let f = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(false)
-        .open(path)?;
+    let f = OpenOptions::new().read(true).write(true).open(path)?;
 
     let mut buf = [1u8; 1024];
     f.read_exact_at(&mut buf, 1024)?;
@@ -61,6 +57,19 @@ fn use_dev(path: &str) -> Result<()> {
     assert_eq!(&buf[0..10], &[0u8; 10]);
 
     f.write_all_at(&[3u8; 2], 1024 * 10)?;
+    f.sync_data()?;
+
+    f.read_exact_at(&mut buf, 1024 * 10)?;
+    assert_eq!(&buf[0..4], [3, 3, 0, 0]);
+
+    Ok(())
+}
+
+fn check_use_dev(path: &str) -> Result<()> {
+    let f = OpenOptions::new().read(true).write(true).open(path)?;
+
+    // re-read what should be present after use_dev
+    let mut buf = [0u8; 1024];
     f.read_exact_at(&mut buf, 1024 * 10)?;
     assert_eq!(&buf[0..4], [3, 3, 0, 0]);
 
@@ -132,6 +141,13 @@ fn test_foreground_client() -> Result<()> {
         .arg("--foreground")
         .arg(dev)
         .spawn()?;
+    sleep(Duration::from_millis(100));
+
+    Command::new("sudo")
+        .args(["chown", &whoami::username(), dev])
+        .status()
+        .expect("failed to chown");
+    use_dev(dev)?;
 
     Command::new(exe_path("client"))
         .arg("--disconnect")
@@ -141,6 +157,59 @@ fn test_foreground_client() -> Result<()> {
     let s = client.wait()?;
     assert!(s.success(), "client --foreground failed: {s}");
 
+    server.kill()?;
+    server.wait()?;
+    Ok(())
+}
+
+#[test]
+// serialize because tests connect to the same port
+#[serial]
+// nbd only works on Linux
+#[cfg_attr(not(target_os = "linux"), ignore)]
+fn test_concurrent_connections() -> Result<()> {
+    let dev = "/dev/nbd1";
+    let dev2 = "/dev/nbd2";
+    if !Path::new(dev).exists() {
+        eprintln!("nbd is not set up (run sudo modprobe nbd)");
+        return Ok(());
+    }
+
+    let mut server = Command::new(exe_path("server"))
+        // .arg("--mem")
+        .args(["--size", "10"])
+        .spawn()
+        .expect("failed to start server");
+    // wait for server to start listening for connections
+    sleep(Duration::from_millis(100));
+
+    // both clients should be able to connect
+    Command::new(exe_path("client")).arg(dev).status()?;
+    Command::new(exe_path("client")).arg(dev2).status()?;
+
+    Command::new("sudo")
+        .args(["chown", &whoami::username(), dev])
+        .status()
+        .expect("failed to chown");
+    Command::new("sudo")
+        .args(["chown", &whoami::username(), dev2])
+        .status()
+        .expect("failed to chown");
+
+    use_dev(dev)?;
+    // both devices have the same underlying storage
+    check_use_dev(dev2)?;
+
+    Command::new(exe_path("client"))
+        .arg("-d")
+        .arg(dev)
+        .status()?;
+    Command::new(exe_path("client"))
+        .arg("-d")
+        .arg(dev2)
+        .status()?;
+
+    // let the clients disconnect on their own
     server.kill()?;
     server.wait()?;
     Ok(())

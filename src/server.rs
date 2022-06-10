@@ -8,11 +8,12 @@
 //! the protocol description.
 
 #![deny(missing_docs)]
-use std::cell::RefCell;
 use std::fs::File;
 use std::io::{self, prelude::*};
 use std::net::TcpListener;
 use std::os::unix::fs::FileExt;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 use byteorder::{ReadBytesExt, WriteBytesExt, BE};
 use color_eyre::eyre::{bail, WrapErr};
@@ -26,8 +27,7 @@ use crate::proto::*;
 ///
 /// Blocks is implemented for unix files (using the underlying `pread` and
 /// `pwrite` system calls) and for [`MemBlocks`] for exporting an in-memory byte
-/// array (this is an alias to a `RefCell<Vec<u8>>` and thus must be used in a
-/// single-threaded context).
+/// array.
 pub trait Blocks {
     /// Fill buf starting from off (reading `buf.len()` bytes)
     fn read_at(&self, buf: &mut [u8], off: u64) -> io::Result<()>;
@@ -63,37 +63,46 @@ impl Blocks for File {
 
 /// MemBlocks is a convenience for an in-memory implementation of Blocks using
 /// an array of bytes.
-pub type MemBlocks = RefCell<Vec<u8>>;
+#[derive(Debug, Clone)]
+pub struct MemBlocks(Arc<Mutex<Vec<u8>>>);
+
+impl MemBlocks {
+    /// Create a new MemBlocks from an in-memory array.
+    pub fn new(data: Vec<u8>) -> Self {
+        MemBlocks(Arc::new(Mutex::new(data)))
+    }
+}
 
 impl Blocks for MemBlocks {
     fn read_at(&self, buf: &mut [u8], off: u64) -> io::Result<()> {
+        let data = self.0.lock().unwrap();
         let off = off as usize;
-        if off + buf.len() > self.borrow().len() {
+        if off + buf.len() > data.len() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "out-of-bounds read",
             ));
         }
-        let data = self.borrow();
         buf.copy_from_slice(&data[off..off + buf.len()]);
         Ok(())
     }
 
     fn write_at(&self, buf: &[u8], off: u64) -> io::Result<()> {
         let off = off as usize;
-        if off + buf.len() > self.borrow().len() {
+        let mut data = self.0.lock().unwrap();
+        if off + buf.len() > data.len() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "out-of-bounds write",
             ));
         }
-        let mut data = self.borrow_mut();
         data[off..off + buf.len()].copy_from_slice(buf);
         Ok(())
     }
 
     fn size(&self) -> io::Result<u64> {
-        Ok(self.borrow().len() as u64)
+        let data = self.0.lock().unwrap();
+        Ok(data.len() as u64)
     }
 
     fn flush(&self) -> io::Result<()> {
@@ -172,24 +181,16 @@ impl<F: Blocks> Export<F> {
     }
 }
 
-/// Server implements the NBD protocol, with a single export.
 #[derive(Debug)]
-pub struct Server<F: Blocks> {
+struct ServerInner<F: Blocks> {
     export: Export<F>,
 }
 
-impl<F: Blocks> Server<F> {
+impl<F: Blocks> ServerInner<F> {
     // fake constant for the server's supported operations
     #[allow(non_snake_case)]
     fn TRANSMIT_FLAGS() -> TransmitFlags {
         TransmitFlags::HAS_FLAGS | TransmitFlags::SEND_FLUSH | TransmitFlags::SEND_FUA
-    }
-
-    /// Create a Server that exports blocks.
-    pub fn new(blocks: F) -> Self {
-        Self {
-            export: Export(blocks),
-        }
     }
 
     // Agree on basic negotiation flags.
@@ -396,17 +397,15 @@ impl<F: Blocks> Server<F> {
         }
     }
 
-    /// Handshake and communicate with a client on a single connection.
-    ///
-    /// Returns Ok(()) when client gracefully disconnects.
-    pub fn handle_client<IO: Read + Write>(&self, mut stream: IO) -> Result<()> {
+    /// Handle a single client, and return on disconnect.
+    fn handle_client<IO: Read + Write>(&self, mut stream: IO) -> Result<()> {
         let flags = Self::initial_handshake(&mut stream).wrap_err("initial handshake failed")?;
         if let Some(export) = self
             .handshake_haggle(&mut stream, flags)
             .wrap_err("handshake haggling failed")?
         {
             info!("handshake finished with {:?}", flags);
-            let r = Server::handle_ops(export, &mut stream).wrap_err("handling client operations");
+            let r = Self::handle_ops(export, &mut stream).wrap_err("handling client operations");
             if let Err(err) = r {
                 // if the error is due to UnexpectedEof, then the client closed
                 // the connection, which the server should allow gracefully
@@ -420,11 +419,27 @@ impl<F: Blocks> Server<F> {
         }
         Ok(())
     }
+}
+
+/// Server implements the NBD protocol, with a single export.
+#[derive(Debug)]
+pub struct Server<F: Blocks>(Arc<ServerInner<F>>);
+
+impl<F: Blocks + Sync + Send + 'static> Server<F> {
+    /// Create a Server that exports blocks.
+    pub fn new(blocks: F) -> Self {
+        let export = Export(blocks);
+        Self(Arc::new(ServerInner { export }))
+    }
+
+    /// Handshake and communicate with a client on a single connection.
+    ///
+    /// Returns Ok(()) when client gracefully disconnects.
+    pub fn handle_client<IO: Read + Write>(&self, stream: IO) -> Result<()> {
+        self.0.handle_client(stream)
+    }
 
     /// Start accepting connections from clients and processing commands.
-    ///
-    /// Currently accepts in a single thread, so only one client can be
-    /// connected at a time.
     pub fn start(self) -> Result<()> {
         let addr = ("127.0.0.1", TCP_PORT);
         let listener = TcpListener::bind(addr)?;
@@ -432,11 +447,11 @@ impl<F: Blocks> Server<F> {
             let stream = stream?;
             stream.set_nodelay(true)?;
             info!(target: "nbd", "client connected");
-            // TODO: how to process clients in parallel? self has to be shared among threads
-            match self.handle_client(stream) {
+            let server = self.0.clone();
+            thread::spawn(move || match server.handle_client(stream) {
                 Ok(_) => info!(target: "nbd", "client disconnected"),
                 Err(err) => eprintln!("error handling client:\n{:?}", err),
-            }
+            });
         }
         Ok(())
     }
