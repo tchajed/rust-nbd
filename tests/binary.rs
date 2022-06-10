@@ -2,6 +2,7 @@
 
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
+use std::process;
 use std::{
     env,
     fs::OpenOptions,
@@ -26,6 +27,47 @@ fn exe_path(name: &str) -> PathBuf {
 
 fn cmd_stdout(out: Output) -> String {
     String::from_utf8(out.stdout).expect("non utf-8 output")
+}
+
+fn start_server() -> process::Child {
+    let server = Command::new(exe_path("server"))
+        .arg("--mem")
+        .args(["--size", "10"])
+        .spawn()
+        .expect("failed to start server");
+    // wait for server to start listening for connections
+    sleep(Duration::from_millis(100));
+    server
+}
+
+fn stop_server(mut server: process::Child) {
+    server.kill().expect("could not kill server process");
+    server.wait().expect("waiting for server");
+}
+
+fn make_public(path: &str) {
+    let s = Command::new("sudo")
+        .args(["chmod", "a+rw", path])
+        .status()
+        .expect("chmod failed");
+    assert!(s.success());
+}
+
+fn client_connect(dev: &str) {
+    let s = Command::new(exe_path("client"))
+        .arg(dev)
+        .status()
+        .expect("client connect failed");
+    assert!(s.success());
+}
+
+fn client_disconnect(dev: &str) {
+    let s = Command::new(exe_path("client"))
+        .arg("--disconnect")
+        .arg(dev)
+        .status()
+        .expect("client disconnect failed");
+    assert!(s.success());
 }
 
 #[test]
@@ -88,32 +130,15 @@ fn test_connect_to_server() -> Result<()> {
         return Ok(());
     }
 
-    let mut server = Command::new(exe_path("server"))
-        .arg("--mem")
-        .args(["--size", "10"])
-        .spawn()
-        .expect("failed to start server");
-    // wait for server to start listening for connections
-    sleep(Duration::from_millis(100));
+    let server = start_server();
 
     // client should fork and terminate
-    let s = Command::new(exe_path("client")).arg(dev).status()?;
-    assert!(s.success(), "client exited with an error {s}");
-
-    Command::new("sudo")
-        .args(["chown", &whoami::username(), dev])
-        .status()
-        .expect("failed to chown");
-
+    client_connect(dev);
+    make_public(dev);
     use_dev(dev)?;
+    client_disconnect(dev);
 
-    Command::new(exe_path("client"))
-        .arg("--disconnect")
-        .arg(dev)
-        .status()?;
-
-    server.kill()?;
-    server.wait()?;
+    stop_server(server);
     Ok(())
 }
 
@@ -130,11 +155,7 @@ fn test_foreground_client() -> Result<()> {
         return Ok(());
     }
 
-    let mut server = Command::new(exe_path("server"))
-        .arg("--mem")
-        .args(["--size", "10"])
-        .spawn()
-        .expect("failed to start server");
+    let server = start_server();
     sleep(Duration::from_millis(100));
 
     let mut client = Command::new(exe_path("client"))
@@ -143,22 +164,15 @@ fn test_foreground_client() -> Result<()> {
         .spawn()?;
     sleep(Duration::from_millis(100));
 
-    Command::new("sudo")
-        .args(["chown", &whoami::username(), dev])
-        .status()
-        .expect("failed to chown");
+    make_public(dev);
     use_dev(dev)?;
 
-    Command::new(exe_path("client"))
-        .arg("--disconnect")
-        .arg(dev)
-        .status()?;
+    client_disconnect(dev);
 
     let s = client.wait()?;
     assert!(s.success(), "client --foreground failed: {s}");
 
-    server.kill()?;
-    server.wait()?;
+    stop_server(server);
     Ok(())
 }
 
@@ -175,13 +189,7 @@ fn test_concurrent_connections() -> Result<()> {
         return Ok(());
     }
 
-    let mut server = Command::new(exe_path("server"))
-        .arg("--mem")
-        .args(["--size", "10"])
-        .spawn()
-        .expect("failed to start server");
-    // wait for server to start listening for connections
-    sleep(Duration::from_millis(100));
+    let server = start_server();
 
     // both clients should be able to connect
     //
@@ -191,36 +199,24 @@ fn test_concurrent_connections() -> Result<()> {
     // important to do this before calling NBD_DO_IT.
     //
     // That code has some solution for this that I don't understand (yet).
-    Command::new(exe_path("client")).arg(dev).status()?;
+    client_connect(dev);
     sleep(Duration::from_millis(100));
-    Command::new("sudo")
-        .args(["chown", &whoami::username(), dev])
-        .status()
-        .expect("failed to chown");
+
+    make_public(dev);
     use_dev(dev)?;
 
-    Command::new(exe_path("client")).arg(dev2).status()?;
+    client_connect(dev2);
     sleep(Duration::from_millis(100));
-    Command::new("sudo")
-        .args(["chown", &whoami::username(), dev2])
-        .status()
-        .expect("failed to chown");
 
     check_use_dev(dev)?;
     // both devices have the same underlying storage
+    make_public(dev2);
     check_use_dev(dev2)?;
 
-    Command::new(exe_path("client"))
-        .arg("-d")
-        .arg(dev)
-        .status()?;
-    Command::new(exe_path("client"))
-        .arg("-d")
-        .arg(dev2)
-        .status()?;
+    client_disconnect(dev);
+    client_disconnect(dev2);
 
-    server.kill()?;
-    server.wait()?;
+    stop_server(server);
     Ok(())
 }
 
@@ -238,41 +234,23 @@ fn test_multiple_connections() -> Result<()> {
         return Ok(());
     }
 
-    let mut server = Command::new(exe_path("server"))
-        .arg("--mem")
-        .args(["--size", "10"])
-        .spawn()
-        .expect("failed to start server");
-    // wait for server to start listening for connections
-    sleep(Duration::from_millis(100));
+    let server = start_server();
 
     // both clients should be able to connect
-    Command::new(exe_path("client")).arg(dev).status()?;
-    Command::new(exe_path("client")).arg(dev2).status()?;
+    client_connect(dev);
+    client_connect(dev2);
     sleep(Duration::from_millis(100));
 
-    Command::new("sudo")
-        .args(["chown", &whoami::username(), dev])
-        .status()
-        .expect("failed to chown");
-    Command::new("sudo")
-        .args(["chown", &whoami::username(), dev2])
-        .status()
-        .expect("failed to chown");
+    make_public(dev);
+    make_public(dev2);
 
     use_dev(dev)?;
+    check_use_dev(dev)?;
     check_use_dev(dev2)?;
 
-    Command::new(exe_path("client"))
-        .arg("-d")
-        .arg(dev)
-        .status()?;
-    Command::new(exe_path("client"))
-        .arg("-d")
-        .arg(dev2)
-        .status()?;
+    client_disconnect(dev);
+    client_disconnect(dev2);
 
-    server.kill()?;
-    server.wait()?;
+    stop_server(server);
     Ok(())
 }
