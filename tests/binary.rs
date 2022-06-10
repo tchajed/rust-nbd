@@ -176,31 +176,37 @@ fn test_concurrent_connections() -> Result<()> {
     }
 
     let mut server = Command::new(exe_path("server"))
-        // .arg("--mem")
+        .arg("--mem")
         .args(["--size", "10"])
         .spawn()
         .expect("failed to start server");
     // wait for server to start listening for connections
     sleep(Duration::from_millis(100));
 
-    // both clients should be able to connect (wait to avoid conflicting on
-    // device, code isn't that robust)
+    // both clients should be able to connect
+    //
+    // XXX: this test is careful to use the device before starting a second
+    // connection; nbd-client has a comment about how due to some race, Linux
+    // has re-reads the partition table on first open of the device, and it's
+    // important to do this before calling NBD_DO_IT.
+    //
+    // That code has some solution for this that I don't understand (yet).
     Command::new(exe_path("client")).arg(dev).status()?;
     sleep(Duration::from_millis(100));
-
-    Command::new(exe_path("client")).arg(dev2).status()?;
-    sleep(Duration::from_millis(100));
-
     Command::new("sudo")
         .args(["chown", &whoami::username(), dev])
         .status()
         .expect("failed to chown");
+    use_dev(dev)?;
+
+    Command::new(exe_path("client")).arg(dev2).status()?;
+    sleep(Duration::from_millis(100));
     Command::new("sudo")
         .args(["chown", &whoami::username(), dev2])
         .status()
         .expect("failed to chown");
 
-    use_dev(dev)?;
+    check_use_dev(dev)?;
     // both devices have the same underlying storage
     check_use_dev(dev2)?;
 
@@ -212,7 +218,6 @@ fn test_concurrent_connections() -> Result<()> {
         .arg("-d")
         .arg(dev2)
         .status()?;
-    sleep(Duration::from_millis(100));
 
     server.kill()?;
     server.wait()?;
