@@ -58,7 +58,9 @@ fn main() -> Result<()> {
     };
     kernel::set_client(&nbd, client)?;
 
-    if !args.foreground {
+    if args.foreground {
+        kernel::wait(&nbd)?;
+    } else {
         if let Ok(Fork::Child) = daemon(false, false) {
             kernel::wait(&nbd)?;
         }
