@@ -60,10 +60,11 @@ fn main() -> Result<()> {
 
     if args.foreground {
         kernel::wait(&nbd)?;
-    } else {
-        if let Ok(Fork::Child) = daemon(false, false) {
-            kernel::wait(&nbd)?;
-        }
+        return Ok(());
+    }
+
+    if let Ok(Fork::Child) = daemon(false, false) {
+        kernel::wait(&nbd)?;
     }
 
     Ok(())
