@@ -31,7 +31,6 @@ fn cmd_stdout(out: Output) -> String {
 
 fn start_server() -> process::Child {
     let server = Command::new(exe_path("server"))
-        .arg("--mem")
         .args(["--size", "10"])
         .spawn()
         .expect("failed to start server");
@@ -59,6 +58,8 @@ fn client_connect(dev: &str) {
         .status()
         .expect("client connect failed");
     assert!(s.success());
+    // wait for client to establish connection
+    sleep(Duration::from_millis(100));
 }
 
 fn client_disconnect(dev: &str) {
@@ -99,7 +100,7 @@ fn use_dev(path: &str) -> Result<()> {
     assert_eq!(&buf[0..10], &[0u8; 10]);
 
     f.write_all_at(&[3u8; 2], 1024 * 10)?;
-    f.sync_data()?;
+    f.sync_all()?;
 
     f.read_exact_at(&mut buf, 1024 * 10)?;
     assert_eq!(&buf[0..4], [3, 3, 0, 0]);
@@ -220,9 +221,6 @@ fn test_concurrent_connections() -> Result<()> {
     Ok(())
 }
 
-// this test fails due to something to do with a race in the Linux kernel, not
-// our code (as far as I can tell)
-#[ignore]
 #[test]
 #[serial]
 #[cfg_attr(not(target_os = "linux"), ignore)]
@@ -239,7 +237,6 @@ fn test_multiple_connections() -> Result<()> {
     // both clients should be able to connect
     client_connect(dev);
     client_connect(dev2);
-    sleep(Duration::from_millis(100));
 
     make_public(dev);
     make_public(dev2);
