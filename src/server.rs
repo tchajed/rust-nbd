@@ -88,8 +88,8 @@ impl Blocks for MemBlocks {
     }
 
     fn write_at(&self, buf: &[u8], off: u64) -> io::Result<()> {
-        let off = off as usize;
         let mut data = self.0.lock().unwrap();
+        let off = off as usize;
         if off + buf.len() > data.len() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
