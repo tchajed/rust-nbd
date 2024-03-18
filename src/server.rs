@@ -145,12 +145,12 @@ impl<F: Blocks> Export<F> {
         "default".to_string()
     }
 
-    fn read<'a, 'b>(
-        &'a self,
+    fn read<'a>(
+        &self,
         off: u64,
         len: u32,
-        buf: &'b mut [u8],
-    ) -> core::result::Result<&'b mut [u8], ErrorType> {
+        buf: &'a mut [u8],
+    ) -> core::result::Result<&'a mut [u8], ErrorType> {
         let len = len as usize;
         if buf.len() < len {
             return Err(ErrorType::EOVERFLOW);
@@ -177,7 +177,7 @@ impl<F: Blocks> Export<F> {
     }
 
     fn size(&self) -> io::Result<u64> {
-        self.0.size().map(|s| s as u64)
+        self.0.size()
     }
 }
 
@@ -258,7 +258,7 @@ impl<F: Blocks> ServerInner<F> {
                     // - 16 bits, transmission flags
                     let mut buf = vec![];
                     buf.write_u16::<BE>(InfoType::EXPORT.into())?;
-                    buf.write_u64::<BE>(self.export.size()? as u64)?;
+                    buf.write_u64::<BE>(self.export.size()?)?;
                     buf.write_u16::<BE>(Self::TRANSMIT_FLAGS().bits())?;
                     OptReply::new(opt_typ, ReplyType::INFO, buf).put(stream)?;
                 }

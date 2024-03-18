@@ -60,7 +60,7 @@ mod ioctl {
 /// Set socket for an NBD device opened at `f`. Should be connected to an NBD server.
 fn set_sock(f: &File, sock: RawFd) -> io::Result<()> {
     let fd = f.as_raw_fd();
-    unsafe { ioctl::set_sock(fd, sock as i32)? };
+    unsafe { ioctl::set_sock(fd, sock)? };
     Ok(())
 }
 
