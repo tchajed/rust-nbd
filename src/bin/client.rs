@@ -10,7 +10,7 @@ use nbd::{client::Client, kernel};
 #[derive(Parser, Debug)]
 #[clap(version, about, long_about = None)]
 struct Args {
-    #[clap(short, long, default_value = "localhost")]
+    #[clap(short = 'a', long, default_value = "localhost")]
     host: String,
 
     #[clap(short, long, help = "disconnect from an existing client")]
