@@ -1,5 +1,10 @@
 //! Integration tests for the client and server binaries.
 
+// On rust nightly, warning about not calling `.wait()` on server, but this is
+// actually called in `stop_server()`.
+#![allow(unknown_lints)]
+#![allow(clippy::zombie_processes)]
+
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::process;
