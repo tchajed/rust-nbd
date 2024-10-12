@@ -13,8 +13,11 @@ This code implements:
 - A userspace NBD server that is compatible with Linux.
 - A Rust re-implementation of the `nbd-client` utility (from the [standard userland tools](https://github.com/NetworkBlockDevice/nbd)). This avoids needing to install anything extra to use NBD.
 
-All of the interactions with the kernel are very Linux-specific, but the server
-does run on macOS and the client library should be able to interact with it.
+All of the interactions with the kernel are very Linux-specific.
+
+macOS does not provide an nbd kernel component, but it can run the server.
+There is also a Rust library to interact with the server that would work if you
+wanted to use nbd from userspace.
 
 Here's a quick demo of running the server and connecting with the client:
 
