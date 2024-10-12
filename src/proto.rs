@@ -46,16 +46,19 @@ impl fmt::Display for ProtocolError {
 impl Error for ProtocolError {}
 
 bitflags! {
+  #[derive(Copy, Clone, Debug)]
   pub(crate) struct HandshakeFlags: u16 {
     const FIXED_NEWSTYLE = 0b01;
     const NO_ZEROES = 0b10;
   }
 
+  #[derive(Copy, Clone, Debug)]
   pub(crate) struct ClientHandshakeFlags: u32 {
     const C_FIXED_NEWSTYLE = 0b01;
     const C_NO_ZEROES = 0b10;
   }
 
+  #[derive(Copy, Clone, Debug)]
   pub(crate) struct TransmitFlags: u16 {
     const HAS_FLAGS = 1 << 0;
     const READ_ONLY = 1 << 1;
@@ -266,6 +269,7 @@ pub(crate) enum Cmd {
 }
 
 bitflags! {
+    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
     pub(crate) struct CmdFlags: u16 {
         const FUA = 1 << 0;
         const NO_HOLE = 1 << 1;
